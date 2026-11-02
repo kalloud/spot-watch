@@ -83,7 +83,7 @@ Each check decides, per spot, whether a vehicle covers it and whether a person i
 3. For each spot:
    - **coverage** = the largest intersection of any vehicle box (`car`, `truck`, `bus`, `motorcycle`) with the spot box, divided by the spot box's area.
    - **occupied reading** = coverage ≥ `occThresh`.
-   - **person near** = any `person` box overlaps the spot box expanded by 35%.
+   - **person near** = any `person` box overlaps the spot box expanded by 35% (35% of its width added on the left and right, 35% of its height on the top and bottom).
    - **lights (experimental, off by default)** = the spot's mean brightness jumps above its slow-moving baseline by more than a set amount.
 4. Update that spot's state machine and send any alerts.
 
@@ -91,6 +91,8 @@ Each check decides, per spot, whether a vehicle covers it and whether a person i
 
 - Becomes `occupied` after `confirmN` occupied readings in a row.
 - Becomes `vacant` after `confirmN` vacant readings in a row.
+- A failed check, a paused loop or a stopped camera gives no reading; it never counts as vacant.
+- A spot resets to `unknown`, without a log row, when it is redrawn or the frame orientation changes, so neither can look like a departure.
 - The **FREE** alert fires only on `occupied → vacant`, never on the first reading from `unknown`.
 - The **heads-up** alert fires when the spot is `occupied` and "person near" (or lights) holds for `hintN` readings in a row. It has a cooldown per spot.
 
@@ -110,7 +112,10 @@ Spot boxes are stored as fractions (0–1) of the frame, so they survive changes
 
 **Event log (always on)**
 
-Every state change and alert is appended to a log in localStorage, whether or not hunting is on and including quiet hours. Each row records: ISO timestamp, spot, event (`occupied`, `vacant`, `person_near`, `alert_free`, `alert_headsup`, `hunt_on`, `hunt_off`, `camera_stopped`), coverage %, and hunting on/off.
+Every state change and alert is appended to a log in localStorage, whether or not hunting is on and including quiet hours. Each row records: ISO timestamp, spot, event (`start`, `occupied`, `vacant`, `person_near`, `alert_free`, `alert_headsup`, `hunt_on`, `hunt_off`, `camera_stopped`), coverage %, and hunting on/off (0/1 in the CSV).
+
+- `start` is written each time the camera starts, so gaps after a reload are explainable.
+- `person_near` is written only while the spot is occupied, once per visit: a visit starts after `hintN` readings in a row with a person near and ends after `hintN` readings without one.
 
 - An **Export CSV** button downloads the full log.
 - Cap the log at about 20,000 rows and drop the oldest first, so localStorage never fills up.
@@ -155,7 +160,7 @@ One screen, built to work in both portrait and landscape: the live camera with a
 - Buttons: Start, Pause/Resume, Draw spot 1, Draw spot 2, Test alert, Export CSV, Hunt on/off (a local override for testing).
 - Hunting status: on/off, when it ends (timeout or quiet hours), and the last command received.
 - Per spot: state, coverage %, person near (yes/no).
-- Settings: alert topic and control topic (each with a subscribe link), interval, `occThresh`, `confirmN`, `hintN`, hunting timeout, quiet-hours start and end, lights hint on/off, debug boxes on/off.
+- Settings: alert topic and control topic (each with a subscribe link), interval, `minScore`, `occThresh`, `confirmN`, `hintN`, person margin, hunting timeout, quiet-hours start and end, lights hint on/off, debug boxes on/off.
 - Status line: TF.js backend, ms per check, last check time, log row count.
 - A rolling on-screen view of the last \~50 events; the full history is in the event log.
 

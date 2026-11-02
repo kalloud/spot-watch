@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
-<title>Spot Watch · Phase 1</title>
+<title>Spot Watch · Phase 2</title>
 <style>
   :root {
     --bg: #111418; --panel: #1b2027; --line: #2c333d; --text: #e6e9ee; --muted: #8b95a3;
@@ -76,10 +76,17 @@
   dl.stats dt { color: var(--muted); }
   dl.stats dd { margin: 0; font-family: var(--mono); word-break: break-word; }
 
-  #detTable { margin-top: 10px; font-size: 14px; }
-  #detTable th, #detTable td { text-align: left; padding: 3px 8px 3px 0; border-top: 1px solid var(--line); }
-  #detTable th { color: var(--muted); font-weight: 400; border-top: 0; }
+  #detTable, #spotTable { margin-top: 10px; font-size: 14px; }
+  #detTable th, #detTable td, #spotTable th, #spotTable td { text-align: left; padding: 3px 8px 3px 0; border-top: 1px solid var(--line); }
+  #detTable th, #spotTable th { color: var(--muted); font-weight: 400; border-top: 0; }
   #detTable td.num { font-family: var(--mono); }
+  .spot-occupied { color: var(--fail); font-weight: 600; }
+  .spot-vacant { color: var(--ok); font-weight: 600; }
+  .spot-unknown { color: var(--muted); }
+
+  .settings { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
+  #events { list-style: none; margin: 0; padding: 0; max-height: 240px; overflow: auto; -webkit-overflow-scrolling: touch;
+            font: 12px/1.5 var(--mono); }
   .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; }
 
   #messages { list-style: none; margin: 8px 0 0; padding: 0; }
@@ -88,7 +95,7 @@
 
   #log { margin: 0; max-height: 300px; overflow: auto; -webkit-overflow-scrolling: touch;
          font: 12px/1.45 var(--mono); white-space: pre-wrap; word-break: break-word; }
-  #reportBox { width: 100%; height: 220px; margin-top: 10px; font: 12px var(--mono); color: var(--text);
+  #reportBox, #csvBox { width: 100%; height: 220px; margin-top: 10px; font: 12px var(--mono); color: var(--text);
                background: #0d1117; border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
 </style>
 </head>
@@ -101,14 +108,14 @@
 </div>
 
 <header>
-  <h1>Spot Watch · Phase 1</h1>
+  <h1>Spot Watch · Phase 2</h1>
   <span class="build" id="build"></span>
 </header>
 
 <script>
   // Runs before the libraries and the main script, so load failures and
   // syntax errors still reach the screen (the phone has no console).
-  var SW_BUILD = 'phase1 · 2026-11-02 · 1';
+  var SW_BUILD = 'phase2 · 2026-11-02 · 1';
   var SW_errors = [];
   document.getElementById('build').textContent = SW_BUILD;
 
@@ -170,6 +177,10 @@
     <label class="check"><input type="checkbox" id="debugBoxes"> Debug boxes</label>
   </div>
   <div class="hint muted" id="drawHint"></div>
+  <table id="spotTable">
+    <thead><tr><th>Spot</th><th>State</th><th>Coverage</th><th>Person</th><th>Next change</th></tr></thead>
+    <tbody id="spotRows"></tbody>
+  </table>
 </section>
 
 <section>
@@ -179,6 +190,22 @@
     <thead><tr><th>Class</th><th>Score</th><th>Box x, y, w, h (video px)</th></tr></thead>
     <tbody id="detections"><tr><td colspan="3" class="muted">No check yet</td></tr></tbody>
   </table>
+</section>
+
+<section>
+  <h2>Events</h2>
+  <ul id="events"></ul>
+  <div class="row">
+    <button id="exportCsv" class="primary" type="button">Export CSV</button>
+    <button id="showCsv" type="button">Show CSV</button>
+  </div>
+  <div class="hint muted" id="exportResult"></div>
+  <textarea id="csvBox" readonly hidden></textarea>
+</section>
+
+<section>
+  <h2>Settings</h2>
+  <div class="settings" id="settings"></div>
 </section>
 
 <section>
@@ -232,15 +259,28 @@
   'use strict';
 
   const NTFY = 'https://ntfy.sh';
-  const INTERVAL_MS = 1500;       // PLAN.md `interval`: start-to-start, never overlapping
-  const MIN_SCORE = 0.35;         // PLAN.md `minScore`
   const MAX_BOXES = 20;
-  const MAX_INPUT_PX = 640;       // the frame's longer side is scaled down to this
+  const MAX_INPUT_PX = 640;       // the crop's longer side is scaled down to this
+  const CROP_MARGIN = 0.5;        // margin around the spots, as a share of their combined size
+  const CROP_MIN_MARGIN = 0.05;   // ...but at least this share of the frame
+  const EVENT_LOG_MAX = 20000;    // oldest rows are dropped first
+  const EVENTS_SHOWN = 50;
+  // Tuning settings from PLAN.md, editable on the page and saved in localStorage.
+  // `interval` is start-to-start; a check never overlaps the previous one.
+  const SETTINGS = [
+    { key: 'interval', label: 'Interval (ms)', def: 1500, min: 500, max: 10000, int: true },
+    { key: 'minScore', label: 'minScore', def: 0.35, min: 0.1, max: 0.9 },
+    { key: 'occThresh', label: 'occThresh', def: 0.35, min: 0.05, max: 0.95 },
+    { key: 'confirmN', label: 'confirmN', def: 3, min: 1, max: 20, int: true },
+    { key: 'hintN', label: 'hintN', def: 2, min: 1, max: 20, int: true },
+    { key: 'personMargin', label: 'Person margin', def: 0.35, min: 0, max: 2 }
+  ];
   const LOG_MAX = 50;
   const MESSAGES_MAX = 20;
   const PUBLISH_TIMEOUT_MS = 15000;
   const VEHICLES = ['car', 'truck', 'bus', 'motorcycle'];
-  const COLORS = { vehicle: '#ff9f1c', person: '#2ec4f1', other: '#9aa4b2', spotUnknown: '#d0d7de' };
+  const COLORS = { vehicle: '#ff9f1c', person: '#2ec4f1', other: '#9aa4b2', crop: '#58a6ff' };
+  const SPOT_COLORS = { unknown: '#d0d7de', occupied: '#f85149', vacant: '#3fb950' };
   const MIN_SPOT_SIDE = 0.02;     // a drawn box narrower or shorter than 2% of the frame is a stray tap
   const VIDEO_MAX_HEIGHT = 0.85;  // share of the window height the video may use, so a spot fits on screen
   const TOPIC_RE = /^[-_A-Za-z0-9]{1,64}$/;
@@ -251,6 +291,7 @@
     ['backend', 'Backend'],
     ['model', 'Model'],
     ['check', 'Checks'],
+    ['events', 'Event log'],
     ['publish', 'Test alert'],
     ['subscribe', 'Control topic']
   ];
@@ -326,6 +367,65 @@
   window.SW_onError = (msg) => log('error', msg);
   window.SW_errors.forEach((e) => log('error', e.msg));
 
+  // ---------- settings ----------
+
+  const cfg = {};
+
+  function parseSetting(s, raw) {
+    if (raw === null || raw === undefined) return null;
+    const text = String(raw).trim().replace(',', '.');
+    if (text === '') return null;
+    const v = Number(text);
+    if (!isFinite(v) || v < s.min || v > s.max) return null;
+    return s.int ? Math.round(v) : v;
+  }
+  function settingHint(s) { return s.min + '–' + s.max + ' · default ' + s.def; }
+
+  SETTINGS.forEach((s) => {
+    const raw = load('cfg.' + s.key, null);
+    const v = parseSetting(s, raw);
+    if (raw !== null && v === null) log('settings', 'Saved ' + s.label + ' is invalid, using the default');
+    cfg[s.key] = v === null ? s.def : v;
+  });
+
+  // Text inputs with a numeric keypad: a type=number input can reject the
+  // decimal comma the keypad shows in some regions.
+  SETTINGS.forEach((s) => {
+    const field = document.createElement('div');
+    const label = document.createElement('label');
+    const input = document.createElement('input');
+    const hint = document.createElement('div');
+    label.htmlFor = 'cfg-' + s.key;
+    label.textContent = s.label;
+    input.type = 'text';
+    input.id = 'cfg-' + s.key;
+    input.setAttribute('inputmode', s.int ? 'numeric' : 'decimal');
+    input.setAttribute('autocomplete', 'off');
+    input.value = String(cfg[s.key]);
+    hint.className = 'hint muted';
+    hint.textContent = settingHint(s);
+    input.addEventListener('change', () => {
+      const v = parseSetting(s, input.value);
+      if (v === null) {
+        hint.className = 'hint bad';
+        hint.textContent = 'Use ' + s.min + '–' + s.max + '. Still using ' + cfg[s.key] + '.';
+        return;
+      }
+      hint.className = 'hint muted';
+      hint.textContent = settingHint(s);
+      input.value = String(v);
+      if (v === cfg[s.key]) return;
+      cfg[s.key] = v;
+      save('cfg.' + s.key, String(v));
+      log('settings', s.label + ' = ' + v);
+      renderSpotTable();
+    });
+    field.appendChild(label);
+    field.appendChild(input);
+    field.appendChild(hint);
+    $('settings').appendChild(field);
+  });
+
   // ---------- status rows ----------
 
   const statusEls = {};
@@ -350,6 +450,125 @@
   setStatus('camera', 'idle', 'Tap Start camera');
   setStatus('check', 'idle', 'Waits for camera and model');
   setStatus('publish', 'idle', 'Not sent yet');
+
+  // ---------- event log ----------
+
+  // Rows are [isoTime, spot, event, coveragePct, hunting]: spot is 1-based or
+  // '' for whole-page rows, coverage is '' when it doesn't apply, and hunting
+  // stays 0 until Phase 3 adds hunting mode. One localStorage key holds them all.
+  let eventRows = [];
+  let eventLogOk = true;
+  let lastEventWrite = null;
+  let csvUrl = null;
+
+  function stamp(d) {
+    return pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + ' ' + clock(d);
+  }
+
+  function loadEventLog() {
+    const raw = load('events', null);
+    if (!raw) return;
+    try {
+      const rows = JSON.parse(raw);
+      if (!Array.isArray(rows)) throw new Error('not a list');
+      eventRows = rows.filter((r) => Array.isArray(r) && r.length === 5);
+    } catch (e) {
+      save('events.unreadable', raw);
+      log('events', 'Saved event log unreadable (' + errText(e) + '); kept a copy and started a new one');
+    }
+  }
+
+  function writeEventLog() {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        localStorage.setItem('sw.events', JSON.stringify(eventRows));
+        eventLogOk = true;
+        lastEventWrite = new Date();
+        return;
+      } catch (e) {
+        const full = e && (e.name === 'QuotaExceededError' || e.code === 22);
+        if (!full || !eventRows.length) {
+          eventLogOk = false;
+          SW_showError('Event log not saved: ' + errText(e));
+          return;
+        }
+        // Storage full: drop the oldest 10% and try again.
+        const drop = Math.max(1, Math.ceil(eventRows.length / 10));
+        eventRows.splice(0, drop);
+        log('events', 'Storage full, dropped the oldest ' + drop + ' rows');
+      }
+    }
+    eventLogOk = false;
+    SW_showError('Event log not saved: storage is still full after dropping old rows.');
+  }
+
+  function logEvent(spot, event, coverage) {
+    eventRows.push([new Date().toISOString(), spot === null ? '' : spot + 1, event,
+      coverage === null ? '' : Math.round(coverage * 100), 0]);
+    if (eventRows.length > EVENT_LOG_MAX) eventRows.splice(0, eventRows.length - EVENT_LOG_MAX);
+    writeEventLog();
+    log('event', eventText(eventRows[eventRows.length - 1]));
+    renderEvents();
+  }
+
+  function eventText(r) {
+    return (r[1] !== '' ? 'Spot ' + r[1] + ' ' : '') + r[2] + (r[3] !== '' ? ' · ' + r[3] + '%' : '');
+  }
+
+  function renderEvents() {
+    const ul = $('events');
+    ul.textContent = '';
+    eventRows.slice(-EVENTS_SHOWN).reverse().forEach((r) => {
+      const li = document.createElement('li');
+      li.textContent = stamp(new Date(r[0])) + '  ' + eventText(r);
+      ul.appendChild(li);
+    });
+    if (!eventRows.length) ul.innerHTML = '<li class="muted">No events yet</li>';
+    const detail = eventRows.length + ' rows' + (lastEventWrite ? ' · last write ' + clock(lastEventWrite) : '');
+    setStatus('events', !eventLogOk ? 'fail' : eventRows.length ? 'ok' : 'idle', eventLogOk ? detail : detail + ' · not saving');
+  }
+
+  function eventCsv() {
+    return ['time,spot,event,coverage_pct,hunting'].concat(eventRows.map((r) => r.join(','))).join('\n') + '\n';
+  }
+
+  function csvName() {
+    const d = new Date();
+    return 'spotwatch-log-' + d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) +
+      '-' + pad2(d.getHours()) + pad2(d.getMinutes()) + '.csv';
+  }
+
+  // iOS gives no signal when a download is ignored, so Show CSV is always there as a fallback.
+  $('exportCsv').addEventListener('click', () => {
+    const name = csvName();
+    try {
+      if (csvUrl) URL.revokeObjectURL(csvUrl);
+      csvUrl = URL.createObjectURL(new Blob([eventCsv()], { type: 'text/csv' }));
+      const a = document.createElement('a');
+      a.href = csvUrl;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      $('exportResult').textContent = clock() + ': downloading ' + name + ' (' + eventRows.length + ' rows). If nothing happens, tap Show CSV.';
+      log('events', 'Exported ' + eventRows.length + ' rows as ' + name);
+    } catch (e) {
+      $('exportResult').textContent = 'Download failed (' + errText(e) + '). Tap Show CSV and copy it instead.';
+      log('events', 'Export failed: ' + errText(e));
+    }
+  });
+
+  $('showCsv').addEventListener('click', () => {
+    const box = $('csvBox');
+    box.value = eventCsv();
+    box.hidden = false;
+    box.focus();
+    box.setSelectionRange(0, box.value.length);
+    $('exportResult').textContent = eventRows.length + ' rows shown below. Select all and copy.';
+  });
+
+  loadEventLog();
+  renderEvents();
 
   // ---------- topics ----------
 
@@ -617,6 +836,7 @@
       const detail = cameraDetail();
       setStatus('camera', 'ok', detail);
       log('camera', 'Started: ' + detail);
+      logEvent(null, 'start', null);
       $('startCamera').textContent = 'Restart camera';
       $('pause').disabled = false;
       setDrawButtons();
@@ -640,6 +860,16 @@
   let drawingSpot = -1;           // index of the spot being drawn, -1 when not drawing
   let drag = null;                // { id, x0, y0, x1, y1 } in frame fractions while dragging
   let debugBoxes = load('debugBoxes', '1') === '1';
+
+  // Live state per spot. Reset to `unknown` (without a log row) when the spot is
+  // redrawn or the frame orientation changes, so neither can look like a departure.
+  function freshTrack() {
+    return {
+      state: 'unknown', since: null, occRun: 0, vacRun: 0,
+      coverage: null, person: false, personRun: 0, clearRun: 0, personVisit: false
+    };
+  }
+  let tracks = [freshTrack(), freshTrack()];
 
   function frameOrientation() {
     return video.videoWidth >= video.videoHeight ? 'landscape' : 'portrait';
@@ -676,19 +906,123 @@
   function renderSpotsStatus() {
     const orient = video.videoWidth ? frameOrientation() : null;
     let hiddenIn = null;
+    let active = 0;
     const parts = spots.map((s, i) => {
       if (!s) return 'Spot ' + (i + 1) + ' not set';
       if (orient && s.orient !== orient) {
         hiddenIn = s.orient;
         return 'Spot ' + (i + 1) + ' hidden';
       }
+      active++;
       return 'Spot ' + (i + 1) + ' set';
     });
-    if (hiddenIn) {
-      setStatus('spots', 'warn', 'Drawn in ' + hiddenIn + ', phone is in ' + orient + '. Rotate back or redraw. (' + parts.join(' · ') + ')');
-    } else {
-      setStatus('spots', spots[0] && spots[1] ? 'ok' : 'idle', parts.join(' · '));
+    let text = parts.join(' · ');
+    if (hiddenIn) text = 'Drawn in ' + hiddenIn + ', phone is in ' + orient + '. Rotate back or redraw. (' + text + ')';
+    if (orient && !active) text += ' · Detecting on the full frame, states paused.';
+    setStatus('spots', hiddenIn ? 'warn' : spots[0] && spots[1] ? 'ok' : 'idle', text);
+  }
+
+  function isActive(s) {
+    return !!s && s.orient === frameOrientation();
+  }
+
+  // Where the detector looks: the active spots plus a margin of CROP_MARGIN of
+  // their combined size on each side (at least CROP_MIN_MARGIN of the frame),
+  // clipped to the frame. Null when no spot is active: the full frame is used.
+  function cropRect() {
+    const active = spots.filter(isActive);
+    if (!active.length) return null;
+    let x0 = 1, y0 = 1, x1 = 0, y1 = 0;
+    active.forEach((s) => {
+      x0 = Math.min(x0, s.x);
+      y0 = Math.min(y0, s.y);
+      x1 = Math.max(x1, s.x + s.w);
+      y1 = Math.max(y1, s.y + s.h);
+    });
+    const mx = Math.max(CROP_MARGIN * (x1 - x0), CROP_MIN_MARGIN);
+    const my = Math.max(CROP_MARGIN * (y1 - y0), CROP_MIN_MARGIN);
+    x0 = Math.max(0, x0 - mx);
+    y0 = Math.max(0, y0 - my);
+    x1 = Math.min(1, x1 + mx);
+    y1 = Math.min(1, y1 + my);
+    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+  }
+
+  // Coverage, occupancy and person-near for one spot, worked out in video pixels.
+  function readSpot(s, dets) {
+    const fw = video.videoWidth, fh = video.videoHeight;
+    const sx = s.x * fw, sy = s.y * fh, sw = s.w * fw, sh = s.h * fh;
+    const mx = sw * cfg.personMargin, my = sh * cfg.personMargin;
+    let coverage = 0;
+    let person = false;
+    dets.forEach((d) => {
+      if (VEHICLES.indexOf(d.class) !== -1) {
+        coverage = Math.max(coverage, overlapArea(sx, sy, sw, sh, d.bbox) / (sw * sh));
+      } else if (d.class === 'person' && overlapArea(sx - mx, sy - my, sw + 2 * mx, sh + 2 * my, d.bbox) > 0) {
+        person = true;
+      }
+    });
+    return { coverage: coverage, occupied: coverage >= cfg.occThresh, person: person };
+  }
+
+  function overlapArea(x, y, w, h, b) {
+    const ow = Math.min(x + w, b[0] + b[2]) - Math.max(x, b[0]);
+    const oh = Math.min(y + h, b[1] + b[3]) - Math.max(y, b[1]);
+    return ow > 0 && oh > 0 ? ow * oh : 0;
+  }
+
+  // A spot changes state only after `confirmN` readings in a row agree.
+  // person_near is logged only while occupied, once per visit: a visit starts
+  // after `hintN` readings with a person near and ends after `hintN` without.
+  function updateSpot(i, reading) {
+    const t = tracks[i];
+    t.coverage = reading.coverage;
+    t.person = reading.person;
+    if (reading.occupied) { t.occRun++; t.vacRun = 0; } else { t.vacRun++; t.occRun = 0; }
+    const next = t.occRun >= cfg.confirmN ? 'occupied' : t.vacRun >= cfg.confirmN ? 'vacant' : null;
+    if (next && next !== t.state) {
+      t.state = next;
+      t.since = new Date();
+      logEvent(i, next, reading.coverage);
     }
+    if (reading.person) { t.personRun++; t.clearRun = 0; } else { t.clearRun++; t.personRun = 0; }
+    if (!t.personVisit && t.state === 'occupied' && t.personRun >= cfg.hintN) {
+      t.personVisit = true;
+      logEvent(i, 'person_near', reading.coverage);
+    } else if (t.personVisit && t.clearRun >= cfg.hintN) {
+      t.personVisit = false;
+    }
+  }
+
+  // Readings in a row toward a state change, e.g. "vacant 2/3".
+  function runText(t) {
+    if (t.state !== 'occupied' && t.occRun > 0) return 'occupied ' + Math.min(t.occRun, cfg.confirmN) + '/' + cfg.confirmN;
+    if (t.state !== 'vacant' && t.vacRun > 0) return 'vacant ' + Math.min(t.vacRun, cfg.confirmN) + '/' + cfg.confirmN;
+    return '–';
+  }
+
+  function renderSpotTable() {
+    const tbody = $('spotRows');
+    tbody.textContent = '';
+    const orient = video.videoWidth ? frameOrientation() : null;
+    spots.forEach((s, i) => {
+      const t = tracks[i];
+      const shown = !!s && (!orient || s.orient === orient);
+      const cells = !s ? ['not set', '–', '–', '–']
+        : !shown ? ['hidden (drawn in ' + s.orient + ')', '–', '–', '–']
+        : [t.state + (t.since ? ' since ' + clock(t.since) : ''),
+           t.coverage === null ? '–' : Math.round(t.coverage * 100) + '%',
+           t.coverage === null ? '–' : (t.person ? 'yes' : 'no'),
+           runText(t)];
+      const tr = document.createElement('tr');
+      [String(i + 1)].concat(cells).forEach((text, c) => {
+        const td = document.createElement('td');
+        td.textContent = text;
+        if (c === 1 && shown) td.className = 'spot-' + t.state;
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
   }
 
   function setDrawButtons() {
@@ -763,10 +1097,12 @@
       return;
     }
     spots[i] = { x: round4(r.x), y: round4(r.y), w: round4(r.w), h: round4(r.h), orient: frameOrientation() };
+    tracks[i] = freshTrack();
     save('spots', JSON.stringify(spots));
     log('spots', 'Spot ' + (i + 1) + ' saved: ' + describeSpot(spots[i]));
     stopDrawing('Spot ' + (i + 1) + ' saved.');
     renderSpotsStatus();
+    renderSpotTable();
   });
 
   overlay.addEventListener('pointercancel', (e) => {
@@ -797,6 +1133,7 @@
 
   loadSpots();
   renderSpotsStatus();
+  renderSpotTable();
 
   // ---------- layout ----------
 
@@ -819,6 +1156,8 @@
     const orient = frameOrientation();
     if (lastOrient && orient !== lastOrient) {
       log('camera', 'Frame is now ' + video.videoWidth + '×' + video.videoHeight + ' (' + orient + ')');
+      tracks = [freshTrack(), freshTrack()];
+      lastCrop = null;
       if (drag) {
         drag = null;
         $('drawHint').textContent = 'Phone rotated mid-drag. Try again.';
@@ -829,11 +1168,13 @@
     fitVideo();
     sizeOverlay();
     renderSpotsStatus();
+    renderSpotTable();
   }
 
   // ---------- overlay ----------
 
   let lastDets = [];
+  let lastCrop = null;            // fraction rect the detector last ran on; null for the full frame
 
   function colorFor(cls) {
     if (VEHICLES.indexOf(cls) !== -1) return COLORS.vehicle;
@@ -855,32 +1196,44 @@
     const dpr = window.devicePixelRatio || 1;
     const W = overlay.width, H = overlay.height;
     const orient = frameOrientation();
-    spots.forEach((s, i) => {
-      if (s && s.orient === orient && !(drag && drawingSpot === i)) drawSpot(s, i, W, H, dpr, false);
-    });
+    if (debugBoxes && lastCrop) {
+      octx.lineWidth = 1.5 * dpr;
+      octx.strokeStyle = COLORS.crop;
+      octx.setLineDash([6 * dpr, 4 * dpr]);
+      octx.strokeRect(lastCrop.x * W, lastCrop.y * H, lastCrop.w * W, lastCrop.h * H);
+      octx.setLineDash([]);
+    }
     if (debugBoxes) drawDetections(W / video.videoWidth, H / video.videoHeight, dpr);
-    if (drag) drawSpot(dragRect(), drawingSpot, W, H, dpr, true);
+    spots.forEach((s, i) => {
+      if (s && s.orient === orient && !(drag && drawingSpot === i)) drawSpot(s, i, W, H, dpr, tracks[i]);
+    });
+    if (drag) drawSpot(dragRect(), drawingSpot, W, H, dpr, null);
   }
 
-  // Phase 1 has no spot state yet, so every spot is drawn as "unknown" (grey).
-  function drawSpot(s, i, W, H, dpr, inProgress) {
+  // Colored by state: green vacant, red occupied, grey unknown. `st` is null
+  // for a box still being drawn, which is dashed grey with no readings.
+  function drawSpot(s, i, W, H, dpr, st) {
     const x = s.x * W, y = s.y * H, w = s.w * W, h = s.h * H;
-    const tag = 22 * dpr;
-    octx.fillStyle = 'rgba(208, 215, 222, 0.15)';
+    const color = SPOT_COLORS[st ? st.state : 'unknown'];
+    octx.globalAlpha = 0.18;
+    octx.fillStyle = color;
     octx.fillRect(x, y, w, h);
+    octx.globalAlpha = 1;
     octx.lineWidth = 3 * dpr;
-    octx.strokeStyle = COLORS.spotUnknown;
-    octx.setLineDash(inProgress ? [8 * dpr, 6 * dpr] : []);
+    octx.strokeStyle = color;
+    octx.setLineDash(st ? [] : [8 * dpr, 6 * dpr]);
     octx.strokeRect(x, y, w, h);
     octx.setLineDash([]);
-    octx.fillStyle = 'rgba(0, 0, 0, 0.65)';
-    octx.fillRect(x, y, tag, tag);
-    octx.fillStyle = '#fff';
-    octx.font = 'bold ' + (16 * dpr) + 'px -apple-system, Helvetica, sans-serif';
-    octx.textAlign = 'center';
+    let label = String(i + 1);
+    if (st && st.coverage !== null) label += ' · ' + Math.round(st.coverage * 100) + '%';
+    if (st && st.person) label += ' · person';
+    const tagH = 22 * dpr;
+    octx.font = 'bold ' + (14 * dpr) + 'px -apple-system, Helvetica, sans-serif';
     octx.textBaseline = 'middle';
-    octx.fillText(String(i + 1), x + tag / 2, y + tag / 2 + dpr);
-    octx.textAlign = 'start';
+    octx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+    octx.fillRect(x, y, octx.measureText(label).width + 10 * dpr, tagH);
+    octx.fillStyle = '#fff';
+    octx.fillText(label, x + 5 * dpr, y + tagH / 2 + dpr);
   }
 
   function drawDetections(sx, sy, dpr) {
@@ -999,29 +1352,42 @@
     if (loopStarted || !model || !cameraLive()) return;
     loopStarted = true;
     setStatus('check', 'pending', 'First check (GPU warm-up can take a while)…');
-    log('check', 'Loop started: every ' + INTERVAL_MS + ' ms, minScore ' + MIN_SCORE + ', input ≤' + MAX_INPUT_PX + ' px');
+    log('check', 'Loop started: every ' + cfg.interval + ' ms, minScore ' + cfg.minScore + ', crop ≤' + MAX_INPUT_PX + ' px');
     runCheck();
   }
 
   async function runCheck() {
     const started = performance.now();
     if (!paused && cameraLive()) await check();
-    setTimeout(runCheck, Math.max(0, INTERVAL_MS - (performance.now() - started)));
+    setTimeout(runCheck, Math.max(0, cfg.interval - (performance.now() - started)));
   }
 
   async function check() {
     const t0 = performance.now();
     try {
       const vw = video.videoWidth, vh = video.videoHeight;
-      const scale = Math.min(1, MAX_INPUT_PX / Math.max(vw, vh));
-      const w = Math.round(vw * scale), h = Math.round(vh * scale);
+      const crop = cropRect();
+      const c = crop || { x: 0, y: 0, w: 1, h: 1 };
+      const cx = Math.round(c.x * vw), cy = Math.round(c.y * vh);
+      const cw = Math.max(1, Math.round(c.w * vw)), ch = Math.max(1, Math.round(c.h * vh));
+      const scale = Math.min(1, MAX_INPUT_PX / Math.max(cw, ch));
+      const w = Math.max(1, Math.round(cw * scale)), h = Math.max(1, Math.round(ch * scale));
       if (frame.width !== w) frame.width = w;
       if (frame.height !== h) frame.height = h;
-      fctx.drawImage(video, 0, 0, w, h);
-      const raw = await model.detect(frame, MAX_BOXES, MIN_SCORE);
+      fctx.drawImage(video, cx, cy, cw, ch, 0, 0, w, h);
+      const raw = await model.detect(frame, MAX_BOXES, cfg.minScore);
       const ms = performance.now() - t0;
 
-      lastDets = raw.map((d) => ({ class: d.class, score: d.score, bbox: d.bbox.map((v) => v / scale) }));
+      // Boxes go back to full-frame video pixels. If the phone rotated while
+      // the detector ran, this check's boxes and readings are dropped.
+      const rotated = video.videoWidth !== vw || video.videoHeight !== vh;
+      const kx = cw / w, ky = ch / h;
+      lastDets = rotated ? [] : raw.map((d) => ({
+        class: d.class, score: d.score,
+        bbox: [cx + d.bbox[0] * kx, cy + d.bbox[1] * ky, d.bbox[2] * kx, d.bbox[3] * ky]
+      }));
+      lastCrop = rotated ? null : crop;
+      if (!rotated) spots.forEach((s, i) => { if (isActive(s)) updateSpot(i, readSpot(s, lastDets)); });
       stats.lastMs = ms;
       stats.lastAt = new Date();
       stats.ok++;
@@ -1045,6 +1411,7 @@
       drawOverlay();
       renderDetections();
       renderStats();
+      renderSpotTable();
     } catch (e) {
       stats.errors++;
       setStatus('check', 'fail', stats.ok + ' ok · ' + stats.errors + ' failed · ' + errText(e));
@@ -1099,7 +1466,7 @@
     const tbody = $('detections');
     tbody.textContent = '';
     if (!lastDets.length) {
-      tbody.innerHTML = '<tr><td colspan="3" class="muted">Nothing above ' + Math.round(MIN_SCORE * 100) + '%</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="3" class="muted">Nothing above ' + Math.round(cfg.minScore * 100) + '%</td></tr>';
       return;
     }
     lastDets.forEach((d) => {
@@ -1163,7 +1530,18 @@
     lines.push('');
     lines.push('Spots (frame ' + (video.videoWidth ? video.videoWidth + '×' + video.videoHeight + ' ' + frameOrientation() : 'off') +
       ' · window ' + window.innerWidth + '×' + window.innerHeight + ' · debug boxes ' + (debugBoxes ? 'on' : 'off') + '):');
-    spots.forEach((s, i) => lines.push('  Spot ' + (i + 1) + ': ' + (s ? describeSpot(s) : 'not set')));
+    spots.forEach((s, i) => {
+      const t = tracks[i];
+      lines.push('  Spot ' + (i + 1) + ': ' + (!s ? 'not set' : describeSpot(s) + ' · ' + t.state +
+        (t.since ? ' since ' + clock(t.since) : '') +
+        (t.coverage !== null ? ' · coverage ' + Math.round(t.coverage * 100) + '% · person ' + (t.person ? 'yes' : 'no') : '') +
+        ' · next ' + runText(t)));
+    });
+    lines.push('  Crop: ' + (lastCrop ? 'x ' + pct(lastCrop.x) + ', y ' + pct(lastCrop.y) + ', w ' + pct(lastCrop.w) + ', h ' + pct(lastCrop.h) : 'full frame'));
+    lines.push('Settings: ' + SETTINGS.map((s) => s.key + ' ' + cfg[s.key]).join(', '));
+    lines.push('');
+    lines.push('Events (' + eventRows.length + ' rows, newest first, last ' + EVENTS_SHOWN + '):');
+    eventRows.slice(-EVENTS_SHOWN).reverse().forEach((r) => lines.push('  ' + stamp(new Date(r[0])) + '  ' + eventText(r)));
     lines.push('');
     lines.push('Control topic: ' + messages.length + ' message(s) received, ' + reconnects + ' reconnect(s), last keepalive ' +
       (lastKeepalive ? clock(lastKeepalive) : 'none'));
