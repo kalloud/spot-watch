@@ -70,7 +70,7 @@ The app is one static HTML file with inline JS. There is no build step and no fr
 - Use the phone-only version (Option A); a home computer running Python/YOLO is the fallback if detection quality is too weak.
 - Detect on a crop around the two spots plus a margin, not the full frame. Distant cars are bigger to the model, and it does less work.
 - Mark spots by hand by dragging two boxes on the live view. No automatic spot detection.
-- Send ntfy options as query parameters (`?title=…&priority=…&tags=…`) with a `text/plain` body. This keeps the request "simple" and avoids a CORS preflight. Confirm in Phase 0.
+- Send ntfy options as query parameters (`?title=…&priority=…&tags=…`) with a `text/plain` body. This keeps the request "simple" and avoids a CORS preflight. Confirmed in Phase 0.
 
 ## Detection and state logic
 
@@ -205,8 +205,9 @@ Build in five phases, and test each one on the real 6s before starting the next.
 
 1. **Phase 0 — Feasibility spike (on device).** A bare page on GitHub Pages: open the camera, load COCO-SSD, log detections and ms per check, send one ntfy test alert, and receive one message from a control topic. It also draws the raw detection boxes on the video (so it's clear which car was found), has a WebGL/CPU switch, and has a Copy report button for sending results back.
    - Exit: TF.js runs in Safari 15 on the 6s; one check takes under \~1.5 s; the push arrives on the main phone; a control-topic message reaches the 6s; cars are detected from the real window.
+   - Result (Nov 2, 2026): passed, except the window check, which moved to Phase 1. WebGL averaged 373 ms per check over 272 checks (min 200 ms) on the full frame scaled to 640 px; CPU was slower. Test alerts and control-topic messages both arrived.
 2. **Phase 1 — Spot setup.** Live view with overlay, drawing two spot boxes, saving them as fractions in localStorage, and drawing debug boxes.
-   - Exit: boxes survive reloads and line up with the video in portrait and landscape.
+   - Exit: boxes survive reloads and line up with the video in portrait and landscape; with the phone at the real window, parked cars in both spots get vehicle boxes (carried over from Phase 0).
 3. **Phase 2 — Detection loop, state machine, event log.** Crop-to-spots, coverage, person-near, debounce, per-spot states shown live, every change written to the log, Export CSV.
    - Exit: states track reality for an hour of daytime watching, with no false flips from passing cars; the exported CSV matches what happened.
 4. **Phase 3 — Hunting mode + alerts.** Control topic, iOS Shortcuts for hunt on/off, timeout, quiet hours, FREE and heads-up alerts, camera-stopped, cooldowns, weekly export reminder.
@@ -239,10 +240,10 @@ These need an answer before or during Phase 0. Most are checked on the real devi
 
 - [ ] Does the front window give a clear view of both spots? Which floor, and at what angle?
 - [ ] Exact iOS version on the 6s (Settings → General → About); update to the latest 15.x if it's not already there.
-- [ ] Does TF.js 4.x with the WebGL backend run in Safari 15 on the A9? What is the real ms per check?
-- [ ] Can COCO-SSD `lite_mobilenet_v2` detect the cars from that distance and angle, by day and by night?
-- [ ] Does ntfy accept the query-parameter publish from Safari without CORS issues, and does the ntfy iOS app deliver priority-5 alerts promptly?
-- [ ] Can the 6s hold a live subscription to the control topic (EventSource or polling) for hours, and how fast do hunt commands arrive?
+- [x] Does TF.js 4.x with the WebGL backend run in Safari 15 on the A9? What is the real ms per check? *Yes: 373 ms average, 200 ms min (Phase 0).*
+- [ ] Can COCO-SSD `lite_mobilenet_v2` detect the cars from that distance and angle, by day and by night? *Moved to Phase 1's device test.*
+- [x] Does ntfy accept the query-parameter publish from Safari without CORS issues, and does the ntfy iOS app deliver priority-5 alerts promptly? *Yes (Phase 0).*
+- [ ] Can the 6s hold a live subscription to the control topic (EventSource or polling) for hours, and how fast do hunt commands arrive? *EventSource receives messages (Phase 0); hours-long hold still to test.*
 - [ ] Build and test the two iOS Shortcuts (hunt on / hunt off) on the main iPhone.
 - [ ] Does Safari remember the camera permission for the site, or ask on every reload? (Settings → Safari → Camera.)
 - [ ] Does the video keep playing for hours with Guided Access on and Auto-Lock off, and how hot does the phone get?
