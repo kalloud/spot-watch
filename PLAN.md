@@ -110,6 +110,15 @@ Spot boxes are stored as fractions (0–1) of the frame, so they survive changes
 | Heads-up cooldown | 3 min per spot | Stops repeat alerts while someone loads a trunk |
 | Person margin | 35% of the spot box | How close a person must be to count as "at the car" |
 
+**Low light (experimental, added during Phase 2)**
+
+Safari 15 is believed to offer no exposure-time or ISO control; Copy report lists the camera's capabilities to confirm it on the 6s. What the page can do:
+
+- **Brightness:** each check measures the crop's mean brightness (0–255). Below 45 the page shows "low light", and it returns to normal above 60.
+- **Frame rate:** a 30 / 15 / 10 / 5 fps choice (saved). At a lower rate, iOS may expose each frame for longer at night; parked cars don't move, so the extra blur doesn't matter.
+- **Night boost (off by default):** averages 4 frames of the crop to cut sensor noise, then stretches the levels so the 1st–99th brightness percentiles fill 0–255, with the gain capped at ×6. With debug on, the page shows the model's input under the video.
+- Whether night mode switches on automatically (from the brightness reading) is decided after the night test.
+
 **Event log (always on)**
 
 Every state change and alert is appended to a log in localStorage, whether or not hunting is on and including quiet hours. Each row records: ISO timestamp, spot, event (`start`, `occupied`, `vacant`, `person_near`, `alert_free`, `alert_headsup`, `hunt_on`, `hunt_off`, `camera_stopped`), coverage %, and hunting on/off (0/1 in the CSV).
@@ -233,7 +242,7 @@ Test against what actually happens on the street, writing down each departure by
 | Someone walks past on the sidewalk | No heads-up | Smaller person margin, higher `hintN` |
 | Cars pass on the street | No state change | Raise `confirmN` |
 | Car in the neighboring spot | Doesn't count as occupied | Raise `occThresh`, tighten the box |
-| Night, under street lighting | Parked cars are still detected | Debug boxes; consider the Option B fallback |
+| Night, under street lighting | Parked cars are still detected | Lower frame rate, Night boost, block window reflections; then consider the Option B fallback |
 | Rain, snow on cars, fogged glass | Track the false FREE rate | Raise `confirmN` at night |
 | Snow removal day | Both spots empty and refill | Expect a burst of alerts; that's useful |
 | Camera unplugged / Safari crash | Camera-stopped alert arrives | Watchdog thresholds |

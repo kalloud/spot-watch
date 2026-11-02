@@ -84,6 +84,9 @@
   .spot-vacant { color: var(--ok); font-weight: 600; }
   .spot-unknown { color: var(--muted); }
 
+  #modelView { margin-top: 10px; }
+  #modelView canvas { display: block; max-width: 100%; height: auto; margin-top: 4px; border-radius: 6px; background: #000; }
+
   .settings { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
   #events { list-style: none; margin: 0; padding: 0; max-height: 240px; overflow: auto; -webkit-overflow-scrolling: touch;
             font: 12px/1.5 var(--mono); }
@@ -115,7 +118,7 @@
 <script>
   // Runs before the libraries and the main script, so load failures and
   // syntax errors still reach the screen (the phone has no console).
-  var SW_BUILD = 'phase2 · 2026-11-02 · 1';
+  var SW_BUILD = 'phase2 · 2026-11-02 · 2';
   var SW_errors = [];
   document.getElementById('build').textContent = SW_BUILD;
 
@@ -176,7 +179,17 @@
     <button id="drawCancel" type="button" hidden>Cancel</button>
     <label class="check"><input type="checkbox" id="debugBoxes"> Debug boxes</label>
   </div>
+  <div class="row">
+    <select id="fps" aria-label="Camera frame rate">
+      <option value="30">30 fps</option>
+      <option value="15">15 fps</option>
+      <option value="10">10 fps</option>
+      <option value="5">5 fps</option>
+    </select>
+    <label class="check"><input type="checkbox" id="nightBoost"> Night boost</label>
+  </div>
   <div class="hint muted" id="drawHint"></div>
+  <div id="modelView" hidden><div class="hint muted">What the model sees (debug)</div></div>
   <table id="spotTable">
     <thead><tr><th>Spot</th><th>State</th><th>Coverage</th><th>Person</th><th>Next change</th></tr></thead>
     <tbody id="spotRows"></tbody>
@@ -265,6 +278,11 @@
   const CROP_MIN_MARGIN = 0.05;   // ...but at least this share of the frame
   const EVENT_LOG_MAX = 20000;    // oldest rows are dropped first
   const EVENTS_SHOWN = 50;
+  const FRAME_RATES = [30, 15, 10, 5]; // lower rates may let iOS expose each frame longer at night
+  const BOOST_FRAMES = 4;         // frames Night boost averages per check
+  const BOOST_MAX_GAIN = 6;       // cap on Night boost's levels stretch, so noise isn't blown up without limit
+  const LOW_LIGHT = 45;           // mean brightness (0–255) below which the scene counts as low light
+  const NORMAL_LIGHT = 60;        // ...and above which it counts as normal again
   // Tuning settings from PLAN.md, editable on the page and saved in localStorage.
   // `interval` is start-to-start; a check never overlaps the previous one.
   const SETTINGS = [
@@ -300,8 +318,12 @@
   const video = $('video');
   const overlay = $('overlay');
   const octx = overlay.getContext('2d');
-  const frame = document.createElement('canvas');
+  const frame = document.createElement('canvas');   // the model's input, shown under the video in debug mode
   const fctx = frame.getContext('2d');
+  const luma = document.createElement('canvas');    // small copy of the crop for the brightness reading
+  const lctx = luma.getContext('2d');
+  const stack = document.createElement('canvas');   // where Night boost grabs its frames, off screen
+  const sctx = stack.getContext('2d');
 
   // ---------- small helpers ----------
 
@@ -319,6 +341,7 @@
     if (e.name && e.message) return e.name + ': ' + e.message;
     return e.message || String(e);
   }
+  function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
   function platform() {
     const ios = navigator.userAgent.match(/OS (\d+)_(\d+)(?:_(\d+))? like Mac OS X/);
     const safari = navigator.userAgent.match(/Version\/([\d.]+)/);
@@ -763,6 +786,24 @@
 
   let stream = null;
   let track = null;
+  let fps = Number(load('fps', '30'));
+  if (FRAME_RATES.indexOf(fps) === -1) fps = 30;
+
+  // 30 fps is the camera's default, so it adds no constraint. A lower rate is
+  // asked for as a maximum first, then as a preference if that is refused.
+  function videoConstraints(withMax) {
+    const v = { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } };
+    if (fps < 30) v.frameRate = withMax ? { ideal: fps, max: fps } : { ideal: fps };
+    return v;
+  }
+
+  function cameraCapabilities() {
+    if (!track || !track.getCapabilities) return null;
+    const c = Object.assign({}, track.getCapabilities());
+    delete c.deviceId;
+    delete c.groupId;
+    return c;
+  }
 
   function cameraHint(e) {
     switch (e && e.name) {
@@ -814,10 +855,13 @@
     stopCamera();
     setStatus('camera', 'pending', 'Asking for the camera…');
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }
-      });
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: videoConstraints(true) });
+      } catch (e) {
+        if (!e || e.name !== 'OverconstrainedError' || fps === 30) throw e;
+        log('camera', 'Max ' + fps + ' fps refused, asking for it as a preference');
+        stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: videoConstraints(false) });
+      }
       track = stream.getVideoTracks()[0];
       const thisTrack = track;
       thisTrack.addEventListener('ended', () => {
@@ -835,7 +879,8 @@
       onFrameChange();
       const detail = cameraDetail();
       setStatus('camera', 'ok', detail);
-      log('camera', 'Started: ' + detail);
+      log('camera', 'Started: ' + detail + (fps < 30 ? ' (asked for ' + fps + ' fps)' : ''));
+      log('camera', 'Capabilities: ' + JSON.stringify(cameraCapabilities()));
       logEvent(null, 'start', null);
       $('startCamera').textContent = 'Restart camera';
       $('pause').disabled = false;
@@ -850,6 +895,15 @@
   }
 
   $('startCamera').addEventListener('click', startCamera);
+
+  const fpsSel = $('fps');
+  fpsSel.value = String(fps);
+  fpsSel.addEventListener('change', () => {
+    fps = Number(fpsSel.value);
+    save('fps', String(fps));
+    log('camera', 'Frame rate set to ' + fps + ' fps');
+    if (stream) startCamera();
+  });
 
   // ---------- spots ----------
 
@@ -1123,12 +1177,24 @@
   $('drawCancel').addEventListener('click', () => stopDrawing('Cancelled.'));
 
   const debugToggle = $('debugBoxes');
+  $('modelView').appendChild(frame);
   debugToggle.checked = debugBoxes;
+  $('modelView').hidden = !debugBoxes;
   debugToggle.addEventListener('change', () => {
     debugBoxes = debugToggle.checked;
     save('debugBoxes', debugBoxes ? '1' : '0');
+    $('modelView').hidden = !debugBoxes;
     log('settings', 'Debug boxes ' + (debugBoxes ? 'on' : 'off'));
     drawOverlay();
+  });
+
+  let nightBoost = load('nightBoost', '0') === '1';
+  const boostToggle = $('nightBoost');
+  boostToggle.checked = nightBoost;
+  boostToggle.addEventListener('change', () => {
+    nightBoost = boostToggle.checked;
+    save('nightBoost', nightBoost ? '1' : '0');
+    log('settings', 'Night boost ' + (nightBoost ? 'on' : 'off'));
   });
 
   loadSpots();
@@ -1343,6 +1409,67 @@
   let loopStarted = false;
   let paused = false;
   let lastSummary = null;
+  let brightness = null;
+  let lowLight = false;
+  let lastBoost = null;           // { lo, hi, gain } from Night boost's last levels stretch
+
+  // Mean brightness (0–255) of the crop, read from a 64 px wide copy so it stays cheap.
+  function readLight(cx, cy, cw, ch) {
+    const w = 64, h = Math.max(1, Math.round(64 * ch / cw));
+    if (luma.width !== w) luma.width = w;
+    if (luma.height !== h) luma.height = h;
+    lctx.drawImage(video, cx, cy, cw, ch, 0, 0, w, h);
+    const d = lctx.getImageData(0, 0, w, h).data;
+    let sum = 0;
+    for (let j = 0; j < d.length; j += 4) sum += 0.299 * d[j] + 0.587 * d[j + 1] + 0.114 * d[j + 2];
+    brightness = sum / (d.length / 4);
+    if (!lowLight && brightness < LOW_LIGHT) {
+      lowLight = true;
+      log('light', 'Low light (brightness ' + Math.round(brightness) + ')');
+    } else if (lowLight && brightness > NORMAL_LIGHT) {
+      lowLight = false;
+      log('light', 'Normal light (brightness ' + Math.round(brightness) + ')');
+    }
+  }
+
+  // Night boost: averages BOOST_FRAMES frames of the crop (the scene is still,
+  // so this cuts sensor noise), then stretches the levels so the 1st–99th
+  // brightness percentiles span 0–255, with the gain capped at BOOST_MAX_GAIN.
+  async function boostFrame(cx, cy, cw, ch, w, h, vw, vh) {
+    const n = w * h * 4;
+    const sum = new Uint16Array(n);
+    const gap = Math.max(34, 1000 / (cameraSettings().frameRate || fps));
+    if (stack.width !== w) stack.width = w;
+    if (stack.height !== h) stack.height = h;
+    for (let f = 0; f < BOOST_FRAMES; f++) {
+      if (f) await sleep(gap);
+      if (video.videoWidth !== vw || video.videoHeight !== vh) throw new Error('Frame changed size during Night boost');
+      sctx.drawImage(video, cx, cy, cw, ch, 0, 0, w, h);
+      const d = sctx.getImageData(0, 0, w, h).data;
+      for (let j = 0; j < n; j++) sum[j] += d[j];
+    }
+    const px = w * h;
+    const hist = new Uint32Array(256);
+    for (let j = 0; j < n; j += 4) {
+      hist[Math.min(255, Math.floor((0.299 * sum[j] + 0.587 * sum[j + 1] + 0.114 * sum[j + 2]) / BOOST_FRAMES))]++;
+    }
+    let lo = 0, hi = 255, acc = 0;
+    for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= px * 0.01) { lo = v; break; } }
+    acc = 0;
+    for (let v = 255; v >= 0; v--) { acc += hist[v]; if (acc >= px * 0.01) { hi = v; break; } }
+    const gain = Math.min(BOOST_MAX_GAIN, 255 / Math.max(1, hi - lo));
+    const mul = gain / BOOST_FRAMES, off = lo * gain;
+    const out = fctx.createImageData(w, h);
+    const o = out.data;            // clamps to 0–255 on write
+    for (let j = 0; j < n; j += 4) {
+      o[j] = sum[j] * mul - off;
+      o[j + 1] = sum[j + 1] * mul - off;
+      o[j + 2] = sum[j + 2] * mul - off;
+      o[j + 3] = 255;
+    }
+    fctx.putImageData(out, 0, 0);
+    return { lo: lo, hi: hi, gain: gain };
+  }
 
   function cameraLive() {
     return !!(track && track.readyState === 'live' && video.readyState >= 2 && video.videoWidth > 0);
@@ -1374,7 +1501,9 @@
       const w = Math.max(1, Math.round(cw * scale)), h = Math.max(1, Math.round(ch * scale));
       if (frame.width !== w) frame.width = w;
       if (frame.height !== h) frame.height = h;
-      fctx.drawImage(video, cx, cy, cw, ch, 0, 0, w, h);
+      readLight(cx, cy, cw, ch);
+      lastBoost = nightBoost ? await boostFrame(cx, cy, cw, ch, w, h, vw, vh) : null;
+      if (!lastBoost) fctx.drawImage(video, cx, cy, cw, ch, 0, 0, w, h);
       const raw = await model.detect(frame, MAX_BOXES, cfg.minScore);
       const ms = performance.now() - t0;
 
@@ -1444,6 +1573,9 @@
       ['Last check', fmtMs(stats.lastMs) + (stats.lastAt ? ' at ' + clock(stats.lastAt) : '')],
       ['Average', stats.n ? fmtMs(stats.sum / stats.n) + ' over ' + stats.n + ' (first excluded)' : '–'],
       ['Min / max', stats.n ? fmtMs(stats.min) + ' / ' + fmtMs(stats.max) : '–'],
+      ['Brightness', brightness === null ? '–' : Math.round(brightness) + '/255' + (lowLight ? ' · low light' : '')],
+      ['Night boost', !nightBoost ? 'off' : lastBoost
+        ? 'on · levels ' + lastBoost.lo + '–' + lastBoost.hi + ' · gain ×' + lastBoost.gain.toFixed(1) : 'on'],
       ['Tensors', tensors === null ? '–' : String(tensors)],
       ['Failed checks', String(stats.errors)]
     ];
@@ -1525,7 +1657,8 @@
     lines.push('');
     lines.push('Checks:');
     statRows().forEach(([k, v]) => lines.push('  ' + k + ': ' + v));
-    lines.push('  Camera settings: ' + JSON.stringify(cameraSettings()));
+    lines.push('  Camera settings: ' + JSON.stringify(cameraSettings()) + ' · asked for ' + fps + ' fps');
+    lines.push('  Camera capabilities: ' + JSON.stringify(cameraCapabilities()));
     lines.push('  Last detections: ' + (stats.ok ? summarize(lastDets) : 'none yet'));
     lines.push('');
     lines.push('Spots (frame ' + (video.videoWidth ? video.videoWidth + '×' + video.videoHeight + ' ' + frameOrientation() : 'off') +
