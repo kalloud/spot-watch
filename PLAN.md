@@ -94,7 +94,7 @@ Each check decides, per spot, whether a vehicle covers it and whether a person i
 - The **FREE** alert fires only on `occupied → vacant`, never on the first reading from `unknown`.
 - The **heads-up** alert fires when the spot is `occupied` and "person near" (or lights) holds for `hintN` readings in a row. It has a cooldown per spot.
 
-Spot boxes are stored as fractions (0–1) of the frame, so they survive changes in camera resolution. Each spot also records whether the frame was portrait or landscape when it was drawn. iOS is believed to rotate the camera picture with the phone, so a spot is only shown and used while the frame has that orientation; otherwise the Spots status row asks to rotate back or redraw.
+Spot boxes are stored as fractions (0–1) of the frame, so they survive changes in camera resolution. Each spot also records whether the frame was portrait or landscape when it was drawn. iOS rotates the camera picture with the phone (confirmed in Phase 1: 1280×720 in landscape, 720×1280 in portrait), so a spot is only shown and used while the frame has that orientation; otherwise the Spots status row asks to rotate back or redraw.
 
 **Starting parameters (tune on real footage)**
 
@@ -208,6 +208,7 @@ Build in five phases, and test each one on the real 6s before starting the next.
    - Result (Nov 2, 2026): passed, except the window check, which moved to Phase 1. WebGL averaged 373 ms per check over 272 checks (min 200 ms) on the full frame scaled to 640 px; CPU was slower. Test alerts and control-topic messages both arrived.
 2. **Phase 1 — Spot setup.** Live view with overlay, drawing two spot boxes, saving them as fractions in localStorage, and drawing debug boxes.
    - Exit: boxes survive reloads and line up with the video in portrait and landscape; with the phone at the real window, parked cars in both spots get vehicle boxes (carried over from Phase 0).
+   - Result (Nov 2, 2026): passed. Spots survive reloads; rotating hides them with the warning and rotating back restores them. Cars were detected from the window by day, though the car count varies from check to check on the full frame. Checks averaged 303 ms (266–639 ms) over 139 checks.
 3. **Phase 2 — Detection loop, state machine, event log.** Crop-to-spots, coverage, person-near, debounce, per-spot states shown live, every change written to the log, Export CSV.
    - Exit: states track reality for an hour of daytime watching, with no false flips from passing cars; the exported CSV matches what happened.
 4. **Phase 3 — Hunting mode + alerts.** Control topic, iOS Shortcuts for hunt on/off, timeout, quiet hours, FREE and heads-up alerts, camera-stopped, cooldowns, weekly export reminder.
@@ -239,9 +240,9 @@ Test against what actually happens on the street, writing down each departure by
 These need an answer before or during Phase 0. Most are checked on the real device, not from documentation.
 
 - [ ] Does the front window give a clear view of both spots? Which floor, and at what angle?
-- [ ] Exact iOS version on the 6s (Settings → General → About); update to the latest 15.x if it's not already there.
+- [x] Exact iOS version on the 6s (Settings → General → About); update to the latest 15.x if it's not already there. *iOS 15.8.5, Safari 15.6.7 (Phase 1).*
 - [x] Does TF.js 4.x with the WebGL backend run in Safari 15 on the A9? What is the real ms per check? *Yes: 373 ms average, 200 ms min (Phase 0).*
-- [ ] Can COCO-SSD `lite_mobilenet_v2` detect the cars from that distance and angle, by day and by night? *Moved to Phase 1's device test.*
+- [ ] Can COCO-SSD `lite_mobilenet_v2` detect the cars from that distance and angle, by day and by night? *By day, yes, with a car count that varies between checks on the full frame (Phase 1). Night still to test.*
 - [x] Does ntfy accept the query-parameter publish from Safari without CORS issues, and does the ntfy iOS app deliver priority-5 alerts promptly? *Yes (Phase 0).*
 - [ ] Can the 6s hold a live subscription to the control topic (EventSource or polling) for hours, and how fast do hunt commands arrive? *EventSource receives messages (Phase 0); hours-long hold still to test.*
 - [ ] Build and test the two iOS Shortcuts (hunt on / hunt off) on the main iPhone.
