@@ -1,0 +1,952 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Spot Watch · Phase 0</title>
+<style>
+  :root {
+    --bg: #111418; --panel: #1b2027; --line: #2c333d; --text: #e6e9ee; --muted: #8b95a3;
+    --ok: #3fb950; --warn: #d29922; --fail: #f85149; --pending: #58a6ff; --idle: #6e7681;
+    --mono: ui-monospace, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
+             max(24px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  }
+  main { max-width: 720px; margin: 0 auto; }
+  header { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; margin-bottom: 8px; }
+  h1 { font-size: 18px; margin: 0; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; }
+  .build { color: var(--muted); font: 12px var(--mono); }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin: 10px 0; }
+  a { color: var(--pending); word-break: break-all; }
+  .muted { color: var(--muted); }
+  .small { font-size: 13px; }
+
+  #errors { background: #4a1414; border: 1px solid var(--fail); border-radius: 10px; padding: 10px 12px; margin: 0 0 10px; }
+  #errors .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  #errorList { font: 13px/1.4 var(--mono); word-break: break-word; }
+  #errorList div + div { margin-top: 4px; }
+
+  table { width: 100%; border-collapse: collapse; }
+  #statusTable td, #statusTable th { padding: 4px 6px 4px 0; vertical-align: top; text-align: left; }
+  #statusTable th { font-weight: 600; white-space: nowrap; width: 1%; padding-right: 10px; }
+  #statusTable td:last-child { word-break: break-word; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--idle); margin-top: 5px; }
+  .st-ok .dot { background: var(--ok); }
+  .st-warn .dot { background: var(--warn); }
+  .st-fail .dot { background: var(--fail); }
+  .st-pending .dot { background: var(--pending); }
+  .st-fail td:last-child { color: #ffb4ae; }
+
+  .video-wrap { position: relative; background: #000; border-radius: 8px; overflow: hidden; min-height: 160px; }
+  .video-wrap video { display: block; width: 100%; height: auto; }
+  .video-wrap canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+  .video-wrap .placeholder { position: absolute; top: 50%; left: 0; right: 0; text-align: center; transform: translateY(-50%); color: var(--muted); }
+  .video-wrap.live .placeholder { display: none; }
+
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+  button, select, input {
+    font: inherit; font-size: 16px; color: var(--text); background: #2b3442;
+    border: 1px solid var(--line); border-radius: 8px; min-height: 44px;
+  }
+  button { padding: 0 14px; }
+  button:active { background: #3a4556; }
+  button.primary { background: #1f6feb; border-color: #1f6feb; }
+  button.small { min-height: 32px; font-size: 13px; padding: 0 10px; }
+  select { padding: 0 8px; }
+  input[type=text] { width: 100%; padding: 0 10px; background: #0d1117; font-family: var(--mono); }
+  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+  .field + .field { margin-top: 12px; }
+  .hint { font-size: 13px; margin-top: 4px; }
+  .hint.bad { color: var(--fail); }
+
+  dl.stats { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; margin: 0; font-size: 14px; }
+  dl.stats dt { color: var(--muted); }
+  dl.stats dd { margin: 0; font-family: var(--mono); word-break: break-word; }
+
+  #detTable { margin-top: 10px; font-size: 14px; }
+  #detTable th, #detTable td { text-align: left; padding: 3px 8px 3px 0; border-top: 1px solid var(--line); }
+  #detTable th { color: var(--muted); font-weight: 400; border-top: 0; }
+  #detTable td.num { font-family: var(--mono); }
+  .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; }
+
+  #messages { list-style: none; margin: 8px 0 0; padding: 0; }
+  #messages li { border-top: 1px solid var(--line); padding: 6px 0; word-break: break-word; }
+  #messages .meta { font: 12px var(--mono); color: var(--muted); }
+
+  #log { margin: 0; max-height: 300px; overflow: auto; -webkit-overflow-scrolling: touch;
+         font: 12px/1.45 var(--mono); white-space: pre-wrap; word-break: break-word; }
+  #reportBox { width: 100%; height: 220px; margin-top: 10px; font: 12px var(--mono); color: var(--text);
+               background: #0d1117; border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+</style>
+</head>
+<body>
+<main>
+
+<div id="errors" hidden>
+  <div class="head"><strong>Errors</strong><button id="clearErrors" class="small" type="button">Clear</button></div>
+  <div id="errorList"></div>
+</div>
+
+<header>
+  <h1>Spot Watch · Phase 0</h1>
+  <span class="build" id="build"></span>
+</header>
+
+<script>
+  // Runs before the libraries and the main script, so load failures and
+  // syntax errors still reach the screen (the phone has no console).
+  var SW_BUILD = 'phase0 · 2026-11-02 · 1';
+  var SW_errors = [];
+  document.getElementById('build').textContent = SW_BUILD;
+
+  function SW_showError(msg) {
+    var d = new Date();
+    var time = ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2) + ':' + ('0' + d.getSeconds()).slice(-2);
+    SW_errors.push({ time: time, msg: msg });
+    var line = document.createElement('div');
+    line.textContent = time + '  ' + msg;
+    document.getElementById('errorList').appendChild(line);
+    document.getElementById('errors').hidden = false;
+    if (window.SW_onError) window.SW_onError(msg);
+  }
+
+  window.onerror = function (message, source, line, col) {
+    var where = source ? ' (' + String(source).split('/').pop() + ':' + line + ':' + col + ')' : '';
+    SW_showError(String(message) + where);
+  };
+
+  window.addEventListener('unhandledrejection', function (e) {
+    var r = e.reason;
+    SW_showError('Unhandled rejection: ' + (r && r.message ? (r.name ? r.name + ': ' : '') + r.message : String(r)));
+  });
+
+  function SW_libFail(name) {
+    SW_showError('Could not load ' + name + ' from jsDelivr. Check the network, then reload.');
+  }
+
+  document.getElementById('clearErrors').onclick = function () {
+    document.getElementById('errorList').textContent = '';
+    document.getElementById('errors').hidden = true;
+  };
+</script>
+
+<section>
+  <h2>Status</h2>
+  <table id="statusTable"><tbody id="status"></tbody></table>
+</section>
+
+<section>
+  <h2>Camera</h2>
+  <div class="video-wrap" id="videoWrap">
+    <video id="video" playsinline muted autoplay></video>
+    <canvas id="overlay"></canvas>
+    <div class="placeholder">Camera off</div>
+  </div>
+  <div class="row">
+    <button id="startCamera" class="primary" type="button">Start camera</button>
+    <button id="pause" type="button" disabled>Pause detection</button>
+    <select id="backend" aria-label="TF.js backend">
+      <option value="webgl">WebGL</option>
+      <option value="cpu">CPU</option>
+    </select>
+  </div>
+</section>
+
+<section>
+  <h2>Checks</h2>
+  <dl class="stats" id="stats"></dl>
+  <table id="detTable">
+    <thead><tr><th>Class</th><th>Score</th><th>Box x, y, w, h (video px)</th></tr></thead>
+    <tbody id="detections"><tr><td colspan="3" class="muted">No check yet</td></tr></tbody>
+  </table>
+</section>
+
+<section>
+  <h2>Alert topic</h2>
+  <div class="field">
+    <label for="alertTopic">Subscribe to this topic in the ntfy app on your main phone</label>
+    <input type="text" id="alertTopic" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <div class="hint" id="alertHint"></div>
+  </div>
+  <div class="row">
+    <select id="priority" aria-label="Test alert priority">
+      <option value="5">Priority 5 (max)</option>
+      <option value="4">Priority 4</option>
+      <option value="3">Priority 3 (default)</option>
+      <option value="2">Priority 2</option>
+      <option value="1">Priority 1 (min)</option>
+    </select>
+    <button id="testAlert" class="primary" type="button">Test alert</button>
+  </div>
+  <div class="hint muted" id="publishResult"></div>
+</section>
+
+<section>
+  <h2>Control topic</h2>
+  <div class="field">
+    <label for="controlTopic">Messages sent to this topic show up below</label>
+    <input type="text" id="controlTopic" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <div class="hint" id="controlHint"></div>
+  </div>
+  <div class="hint muted" id="subscribeInfo"></div>
+  <ul id="messages"></ul>
+</section>
+
+<section>
+  <h2>Log (newest first)</h2>
+  <pre id="log"></pre>
+  <div class="row">
+    <button id="copyReport" type="button">Copy report</button>
+    <span class="small muted" id="copyResult"></span>
+  </div>
+  <textarea id="reportBox" readonly hidden></textarea>
+</section>
+
+</main>
+
+<script crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js" onerror="SW_libFail('TF.js 4.22.0')"></script>
+<script crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js" onerror="SW_libFail('COCO-SSD 2.2.3')"></script>
+
+<script>
+(function () {
+  'use strict';
+
+  const NTFY = 'https://ntfy.sh';
+  const INTERVAL_MS = 1500;       // PLAN.md `interval`: start-to-start, never overlapping
+  const MIN_SCORE = 0.35;         // PLAN.md `minScore`
+  const MAX_BOXES = 20;
+  const MAX_INPUT_PX = 640;       // the frame's longer side is scaled down to this
+  const LOG_MAX = 50;
+  const MESSAGES_MAX = 20;
+  const PUBLISH_TIMEOUT_MS = 15000;
+  const VEHICLES = ['car', 'truck', 'bus', 'motorcycle'];
+  const COLORS = { vehicle: '#ff9f1c', person: '#2ec4f1', other: '#9aa4b2' };
+  const TOPIC_RE = /^[-_A-Za-z0-9]{1,64}$/;
+  const STAGES = [
+    ['https', 'HTTPS'],
+    ['camera', 'Camera'],
+    ['backend', 'Backend'],
+    ['model', 'Model'],
+    ['check', 'Checks'],
+    ['publish', 'Test alert'],
+    ['subscribe', 'Control topic']
+  ];
+
+  const $ = (id) => document.getElementById(id);
+  const video = $('video');
+  const overlay = $('overlay');
+  const octx = overlay.getContext('2d');
+  const frame = document.createElement('canvas');
+  const fctx = frame.getContext('2d');
+
+  // ---------- small helpers ----------
+
+  function pad2(n) { return n < 10 ? '0' + n : String(n); }
+  function clock(d) {
+    d = d || new Date();
+    return pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
+  }
+  function fmtMs(ms) {
+    if (ms == null || !isFinite(ms)) return '–';
+    return ms >= 10000 ? (ms / 1000).toFixed(1) + ' s' : Math.round(ms) + ' ms';
+  }
+  function errText(e) {
+    if (!e) return 'Unknown error';
+    if (e.name && e.message) return e.name + ': ' + e.message;
+    return e.message || String(e);
+  }
+  function platform() {
+    const ios = navigator.userAgent.match(/OS (\d+)_(\d+)(?:_(\d+))? like Mac OS X/);
+    const safari = navigator.userAgent.match(/Version\/([\d.]+)/);
+    return (ios ? 'iOS ' + ios[1] + '.' + ios[2] + (ios[3] ? '.' + ios[3] : '') : 'not iOS') +
+      ' · Safari ' + (safari ? safari[1] : 'unknown');
+  }
+
+  // ---------- storage ----------
+
+  let storageOk = true;
+  function load(key, fallback) {
+    try {
+      const v = localStorage.getItem('sw.' + key);
+      return v === null ? fallback : v;
+    } catch (e) {
+      storageOk = false;
+      return fallback;
+    }
+  }
+  function save(key, value) {
+    try {
+      localStorage.setItem('sw.' + key, value);
+    } catch (e) {
+      storageOk = false;
+      log('storage', 'Could not save ' + key + ': ' + errText(e));
+    }
+  }
+
+  // ---------- on-screen log ----------
+
+  const logEntries = [];
+  function log(stage, msg) {
+    const last = logEntries[logEntries.length - 1];
+    if (last && last.stage === stage && last.msg === msg) {
+      last.count++;
+      last.time = clock();
+    } else {
+      logEntries.push({ time: clock(), stage: stage, msg: msg, count: 1 });
+      if (logEntries.length > LOG_MAX) logEntries.shift();
+    }
+    $('log').textContent = logEntries.slice().reverse().map(logLine).join('\n');
+  }
+  function logLine(e) {
+    return e.time + ' [' + e.stage + '] ' + e.msg + (e.count > 1 ? ' (×' + e.count + ')' : '');
+  }
+  window.SW_onError = (msg) => log('error', msg);
+  window.SW_errors.forEach((e) => log('error', e.msg));
+
+  // ---------- status rows ----------
+
+  const statusEls = {};
+  STAGES.forEach(([key, label]) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td><span class="dot"></span></td><th></th><td></td>';
+    tr.children[1].textContent = label;
+    $('status').appendChild(tr);
+    statusEls[key] = { row: tr, text: tr.children[2], state: 'idle', detail: '' };
+  });
+  function setStatus(key, state, detail) {
+    const s = statusEls[key];
+    s.state = state;
+    s.detail = detail || '';
+    s.row.className = 'st-' + state;
+    s.text.textContent = s.detail;
+  }
+
+  setStatus('https', window.isSecureContext ? 'ok' : 'fail',
+    window.isSecureContext ? location.protocol.replace(':', '') + ' · ' + platform()
+                           : 'Not a secure page: the camera is blocked. Open the GitHub Pages https:// URL.');
+  setStatus('camera', 'idle', 'Tap Start camera');
+  setStatus('check', 'idle', 'Waits for camera and model');
+  setStatus('publish', 'idle', 'Not sent yet');
+
+  // ---------- topics ----------
+
+  function randomTopic(prefix) {
+    const chars = 'abcdefghijkmnpqrstuvwxyz23456789'; // 32 chars, so bytes % 32 is unbiased
+    const bytes = new Uint8Array(10);
+    crypto.getRandomValues(bytes);
+    let s = '';
+    for (let i = 0; i < bytes.length; i++) s += chars[bytes[i] % chars.length];
+    return prefix + s;
+  }
+
+  function loadTopic(key) {
+    const v = load(key, null);
+    return v && TOPIC_RE.test(v) ? v : null;
+  }
+  const topics = {
+    alert: loadTopic('alertTopic'),
+    control: loadTopic('controlTopic')
+  };
+  if (!topics.alert) { topics.alert = randomTopic('spotwatch-'); save('alertTopic', topics.alert); }
+  if (!topics.control) { topics.control = randomTopic('spotwatch-ctl-'); save('controlTopic', topics.control); }
+
+  function topicLink(topic) {
+    return 'Web: <a target="_blank" rel="noopener" href="' + NTFY + '/' + topic + '">ntfy.sh/' + topic + '</a>';
+  }
+
+  // Saves on `change` (blur or Return), so the control subscription
+  // isn't torn down on every keystroke.
+  function bindTopic(kind, storageKey, onChange) {
+    const input = $(kind + 'Topic');
+    const hint = $(kind + 'Hint');
+    input.value = topics[kind];
+    hint.innerHTML = topicLink(topics[kind]);
+    input.addEventListener('change', () => {
+      const v = input.value.trim();
+      if (!TOPIC_RE.test(v)) {
+        hint.className = 'hint bad';
+        hint.textContent = 'Use 1–64 letters, digits, - or _. Still using the previous topic.';
+        return;
+      }
+      hint.className = 'hint';
+      if (v === topics[kind]) { hint.innerHTML = topicLink(v); return; }
+      topics[kind] = v;
+      save(storageKey, v);
+      hint.innerHTML = topicLink(v);
+      log('topics', (kind === 'alert' ? 'Alert' : 'Control') + ' topic changed and saved');
+      if (onChange) onChange();
+    });
+  }
+
+  // ---------- ntfy publish ----------
+
+  // POST with a plain string body (Safari sends text/plain;charset=UTF-8) and
+  // options as query params: a CORS "simple" request, so no preflight.
+  async function publish(topic, message, opts) {
+    const qs = [];
+    if (opts.title) qs.push('title=' + encodeURIComponent(opts.title));
+    if (opts.priority) qs.push('priority=' + encodeURIComponent(opts.priority));
+    if (opts.tags) qs.push('tags=' + encodeURIComponent(opts.tags));
+    const url = NTFY + '/' + encodeURIComponent(topic) + (qs.length ? '?' + qs.join('&') : '');
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), PUBLISH_TIMEOUT_MS);
+    try {
+      const res = await fetch(url, { method: 'POST', body: message, signal: ctrl.signal });
+      const body = await res.text();
+      if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + body.slice(0, 200));
+      try { return JSON.parse(body); } catch (e) { return {}; }
+    } catch (e) {
+      if (e.name === 'AbortError') throw new Error('Timed out after ' + PUBLISH_TIMEOUT_MS / 1000 + ' s');
+      if (e.name === 'TypeError') throw new Error('Network or CORS failure (' + e.message + ')');
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  const prioritySel = $('priority');
+  prioritySel.value = load('testPriority', '5');
+  prioritySel.addEventListener('change', () => save('testPriority', prioritySel.value));
+
+  $('testAlert').addEventListener('click', async () => {
+    const btn = $('testAlert');
+    const priority = prioritySel.value;
+    btn.disabled = true;
+    setStatus('publish', 'pending', 'Sending (priority ' + priority + ')…');
+    const t0 = performance.now();
+    try {
+      const reply = await publish(topics.alert, 'Test alert from Spot Watch, sent ' + clock() + ' (' + SW_BUILD + ')', {
+        title: 'Spot Watch test', priority: priority, tags: 'test_tube'
+      });
+      const ms = performance.now() - t0;
+      const detail = 'Accepted by ntfy in ' + fmtMs(ms) + ' · priority ' + priority + (reply.id ? ' · id ' + reply.id : '');
+      setStatus('publish', 'ok', detail);
+      $('publishResult').textContent = clock() + ': ' + detail + '. Now check the main phone.';
+      log('publish', detail);
+    } catch (e) {
+      setStatus('publish', 'fail', errText(e));
+      $('publishResult').textContent = clock() + ': failed: ' + errText(e);
+      log('publish', 'Failed: ' + errText(e));
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // ---------- ntfy subscribe (control topic) ----------
+
+  let es = null;
+  let reconnects = 0;
+  let lastKeepalive = null;
+  let retryTimer = 0;
+  const messages = [];
+
+  function subscribe() {
+    clearTimeout(retryTimer);
+    if (es) es.close();
+    setStatus('subscribe', 'pending', 'Connecting…');
+    const source = new EventSource(NTFY + '/' + encodeURIComponent(topics.control) + '/sse');
+    es = source;
+    let connected = false;
+
+    // EventSource's own `open` and ntfy's named `open` event share a name;
+    // either one means the stream is up.
+    source.addEventListener('open', () => {
+      if (es !== source || connected) return;
+      connected = true;
+      setStatus('subscribe', 'ok', 'Connected · waiting for messages');
+      log('subscribe', 'Connected');
+      renderSubscribeInfo();
+    });
+    source.addEventListener('keepalive', () => {
+      if (es !== source) return;
+      lastKeepalive = new Date();
+      renderSubscribeInfo();
+    });
+    source.addEventListener('message', (e) => {
+      if (es !== source) return;
+      let data;
+      try { data = JSON.parse(e.data); } catch (err) { log('subscribe', 'Unparsable event: ' + String(e.data).slice(0, 80)); return; }
+      if (data.event && data.event !== 'message') return;
+      const now = Date.now();
+      const lagS = data.time ? Math.max(0, Math.round(now / 1000 - data.time)) : null;
+      messages.unshift({ at: new Date(now), text: data.message || '', title: data.title || '', lagS: lagS });
+      if (messages.length > MESSAGES_MAX) messages.pop();
+      renderMessages();
+      setStatus('subscribe', 'ok', 'Connected · last message ' + clock() + (lagS !== null ? ' · ~' + lagS + ' s after send' : ''));
+      log('control', 'Received: "' + (data.message || '').slice(0, 80) + '"' + (lagS !== null ? ' (~' + lagS + ' s after send)' : ''));
+    });
+    source.addEventListener('error', () => {
+      if (es !== source) return;
+      connected = false;
+      reconnects++;
+      renderSubscribeInfo();
+      if (source.readyState === EventSource.CLOSED) {
+        setStatus('subscribe', 'fail', 'Connection closed · retrying in 5 s');
+        log('subscribe', 'Connection closed, retrying in 5 s');
+        retryTimer = setTimeout(subscribe, 5000);
+      } else {
+        setStatus('subscribe', 'warn', 'Connection dropped · reconnecting');
+        log('subscribe', 'Connection dropped, browser is reconnecting');
+      }
+    });
+  }
+
+  function renderSubscribeInfo() {
+    $('subscribeInfo').textContent = 'Reconnects: ' + reconnects +
+      ' · last keepalive: ' + (lastKeepalive ? clock(lastKeepalive) : 'none yet');
+  }
+
+  function renderMessages() {
+    const ul = $('messages');
+    ul.textContent = '';
+    messages.forEach((m) => {
+      const li = document.createElement('li');
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      meta.textContent = clock(m.at) + (m.lagS !== null ? ' · ~' + m.lagS + ' s after send' : '') + (m.title ? ' · ' + m.title : '');
+      const text = document.createElement('div');
+      text.textContent = m.text;
+      li.appendChild(meta);
+      li.appendChild(text);
+      ul.appendChild(li);
+    });
+  }
+
+  bindTopic('alert', 'alertTopic', null);
+  bindTopic('control', 'controlTopic', () => { messages.length = 0; renderMessages(); subscribe(); });
+  renderSubscribeInfo();
+  subscribe();
+
+  // ---------- camera ----------
+
+  let stream = null;
+  let track = null;
+
+  function cameraHint(e) {
+    switch (e && e.name) {
+      case 'NotAllowedError': return 'Permission denied. Settings → Safari → Camera → Allow (or Ask), then reload.';
+      case 'NotFoundError': return 'No camera found.';
+      case 'NotReadableError': return 'Camera is busy. Close other apps using it, then try again.';
+      case 'OverconstrainedError': return 'Camera rejected the requested settings: ' + (e.constraint || '');
+      default: return errText(e);
+    }
+  }
+
+  function stopCamera() {
+    if (stream) stream.getTracks().forEach((t) => t.stop());
+    stream = null;
+    track = null;
+  }
+
+  function waitForVideo(timeoutMs) {
+    if (video.videoWidth > 0) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Video did not start within ' + timeoutMs / 1000 + ' s')), timeoutMs);
+      video.addEventListener('loadedmetadata', () => { clearTimeout(timer); resolve(); }, { once: true });
+    });
+  }
+
+  function cameraSettings() {
+    if (!track || !track.getSettings) return {};
+    const s = track.getSettings();
+    return { width: s.width, height: s.height, frameRate: s.frameRate, facingMode: s.facingMode };
+  }
+
+  async function startCamera() {
+    if (!window.isSecureContext) {
+      setStatus('camera', 'fail', 'Needs https:// (see HTTPS row)');
+      return;
+    }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setStatus('camera', 'fail', 'navigator.mediaDevices.getUserMedia is missing in this browser');
+      return;
+    }
+    $('startCamera').disabled = true;
+    stopCamera();
+    setStatus('camera', 'pending', 'Asking for the camera…');
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }
+      });
+      track = stream.getVideoTracks()[0];
+      const thisTrack = track;
+      thisTrack.addEventListener('ended', () => {
+        if (track !== thisTrack) return;
+        setStatus('camera', 'fail', 'Camera track ended. Tap Restart camera.');
+        log('camera', 'Track ended');
+      });
+      video.muted = true;
+      video.playsInline = true;
+      video.srcObject = stream;
+      await video.play();
+      await waitForVideo(10000);
+      $('videoWrap').className = 'video-wrap live';
+      sizeOverlay();
+      const s = cameraSettings();
+      const detail = video.videoWidth + '×' + video.videoHeight +
+        (s.facingMode ? ' · ' + s.facingMode : '') + (s.frameRate ? ' · ' + Math.round(s.frameRate) + ' fps' : '');
+      setStatus('camera', 'ok', detail);
+      log('camera', 'Started: ' + detail);
+      $('startCamera').textContent = 'Restart camera';
+      $('pause').disabled = false;
+      startLoop();
+    } catch (e) {
+      setStatus('camera', 'fail', cameraHint(e));
+      log('camera', 'Failed: ' + errText(e));
+    } finally {
+      $('startCamera').disabled = false;
+    }
+  }
+
+  $('startCamera').addEventListener('click', startCamera);
+
+  // ---------- overlay ----------
+
+  let lastDets = [];
+
+  function colorFor(cls) {
+    if (VEHICLES.indexOf(cls) !== -1) return COLORS.vehicle;
+    return cls === 'person' ? COLORS.person : COLORS.other;
+  }
+
+  function sizeOverlay() {
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.round(video.clientWidth * dpr);
+    const h = Math.round(video.clientHeight * dpr);
+    if (overlay.width !== w) overlay.width = w;
+    if (overlay.height !== h) overlay.height = h;
+    drawOverlay();
+  }
+
+  function drawOverlay() {
+    octx.clearRect(0, 0, overlay.width, overlay.height);
+    if (!video.videoWidth || !overlay.width) return;
+    const dpr = window.devicePixelRatio || 1;
+    const sx = overlay.width / video.videoWidth;
+    const sy = overlay.height / video.videoHeight;
+    const labelH = 16 * dpr;
+    octx.lineWidth = 2 * dpr;
+    octx.font = (12 * dpr) + 'px -apple-system, Helvetica, sans-serif';
+    octx.textBaseline = 'top';
+    lastDets.forEach((d) => {
+      const x = d.bbox[0] * sx, y = d.bbox[1] * sy, w = d.bbox[2] * sx, h = d.bbox[3] * sy;
+      const color = colorFor(d.class);
+      octx.strokeStyle = color;
+      octx.strokeRect(x, y, w, h);
+      const label = d.class + ' ' + Math.round(d.score * 100) + '%';
+      const ty = y >= labelH ? y - labelH : y;
+      octx.fillStyle = color;
+      octx.fillRect(x, ty, octx.measureText(label).width + 6 * dpr, labelH);
+      octx.fillStyle = '#000';
+      octx.fillText(label, x + 3 * dpr, ty + 2 * dpr);
+    });
+  }
+
+  if (window.ResizeObserver) new ResizeObserver(sizeOverlay).observe(video);
+  else window.addEventListener('resize', sizeOverlay);
+  video.addEventListener('resize', sizeOverlay);
+
+  // ---------- TF.js backend + model ----------
+
+  let model = null;
+  let backendInfo = null;         // set once a backend is ready; tf.getBackend()/tf.memory() would start one early
+  const wantedBackend = load('backend', 'webgl') === 'cpu' ? 'cpu' : 'webgl';
+  const backendSel = $('backend');
+  backendSel.value = wantedBackend;
+  backendSel.addEventListener('change', () => {
+    save('backend', backendSel.value);
+    location.reload();
+  });
+
+  function backendDetail() {
+    const name = tf.getBackend();
+    if (name !== 'webgl') return name;
+    let s = 'webgl';
+    try { s += ' · WebGL ' + tf.env().getNumber('WEBGL_VERSION'); } catch (e) { /* flag missing */ }
+    try { s += tf.env().getBool('WEBGL_RENDER_FLOAT32_ENABLED') ? ' · float32' : ' · float16'; } catch (e) { /* flag missing */ }
+    return s;
+  }
+
+  async function tryBackend(name) {
+    try {
+      const ok = await tf.setBackend(name);
+      if (ok) await tf.ready();
+      return ok;
+    } catch (e) {
+      log('backend', name + ' failed: ' + errText(e));
+      return false;
+    }
+  }
+
+  async function initDetector() {
+    if (typeof tf === 'undefined') {
+      setStatus('backend', 'fail', 'TF.js did not load (see errors)');
+      setStatus('model', 'fail', 'Needs TF.js');
+      return;
+    }
+    setStatus('backend', 'pending', 'Starting ' + wantedBackend + '…');
+    let ok = await tryBackend(wantedBackend);
+    if (!ok && wantedBackend !== 'cpu') {
+      log('backend', 'WebGL did not start, falling back to CPU');
+      ok = await tryBackend('cpu');
+    }
+    if (!ok) {
+      setStatus('backend', 'fail', 'No TF.js backend could start');
+      setStatus('model', 'fail', 'Needs a backend');
+      return;
+    }
+    const fellBack = tf.getBackend() !== wantedBackend;
+    backendInfo = backendDetail();
+    setStatus('backend', fellBack ? 'warn' : 'ok', backendInfo + (fellBack ? ' (fallback, ' + wantedBackend + ' failed)' : '') + ' · TF.js ' + tf.version.tfjs);
+    log('backend', 'Using ' + backendInfo);
+    renderStats();
+
+    if (typeof cocoSsd === 'undefined') {
+      setStatus('model', 'fail', 'COCO-SSD did not load (see errors)');
+      return;
+    }
+    setStatus('model', 'pending', 'Downloading lite_mobilenet_v2…');
+    const t0 = performance.now();
+    try {
+      model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+    } catch (e) {
+      setStatus('model', 'fail', errText(e));
+      log('model', 'Load failed: ' + errText(e));
+      return;
+    }
+    stats.loadMs = performance.now() - t0;
+    setStatus('model', 'ok', 'lite_mobilenet_v2 loaded in ' + fmtMs(stats.loadMs));
+    log('model', 'Loaded in ' + fmtMs(stats.loadMs));
+    renderStats();
+    startLoop();
+  }
+
+  // ---------- check loop ----------
+
+  const stats = {
+    loadMs: null, firstMs: null, lastMs: null, lastAt: null,
+    sum: 0, n: 0, min: Infinity, max: 0, ok: 0, errors: 0
+  };
+  let loopStarted = false;
+  let paused = false;
+  let lastSummary = null;
+
+  function cameraLive() {
+    return !!(track && track.readyState === 'live' && video.readyState >= 2 && video.videoWidth > 0);
+  }
+
+  function startLoop() {
+    if (loopStarted || !model || !cameraLive()) return;
+    loopStarted = true;
+    setStatus('check', 'pending', 'First check (GPU warm-up can take a while)…');
+    log('check', 'Loop started: every ' + INTERVAL_MS + ' ms, minScore ' + MIN_SCORE + ', input ≤' + MAX_INPUT_PX + ' px');
+    runCheck();
+  }
+
+  async function runCheck() {
+    const started = performance.now();
+    if (!paused && cameraLive()) await check();
+    setTimeout(runCheck, Math.max(0, INTERVAL_MS - (performance.now() - started)));
+  }
+
+  async function check() {
+    const t0 = performance.now();
+    try {
+      const vw = video.videoWidth, vh = video.videoHeight;
+      const scale = Math.min(1, MAX_INPUT_PX / Math.max(vw, vh));
+      const w = Math.round(vw * scale), h = Math.round(vh * scale);
+      if (frame.width !== w) frame.width = w;
+      if (frame.height !== h) frame.height = h;
+      fctx.drawImage(video, 0, 0, w, h);
+      const raw = await model.detect(frame, MAX_BOXES, MIN_SCORE);
+      const ms = performance.now() - t0;
+
+      lastDets = raw.map((d) => ({ class: d.class, score: d.score, bbox: d.bbox.map((v) => v / scale) }));
+      stats.lastMs = ms;
+      stats.lastAt = new Date();
+      stats.ok++;
+      if (stats.firstMs === null) {
+        stats.firstMs = ms;
+        log('check', 'First check: ' + fmtMs(ms) + ' (includes GPU warm-up)');
+      } else {
+        stats.n++;
+        stats.sum += ms;
+        stats.min = Math.min(stats.min, ms);
+        stats.max = Math.max(stats.max, ms);
+      }
+      setStatus('check', stats.errors ? 'warn' : 'ok',
+        stats.ok + ' ok · ' + stats.errors + ' failed · avg ' + fmtMs(stats.n ? stats.sum / stats.n : stats.firstMs));
+
+      const summary = summarize(lastDets);
+      if (summary !== lastSummary) {
+        log('detect', summary);
+        lastSummary = summary;
+      }
+      drawOverlay();
+      renderDetections();
+      renderStats();
+    } catch (e) {
+      stats.errors++;
+      setStatus('check', 'fail', stats.ok + ' ok · ' + stats.errors + ' failed · ' + errText(e));
+      log('check', 'Failed: ' + errText(e));
+    }
+  }
+
+  function summarize(dets) {
+    if (!dets.length) return 'Nothing detected';
+    const counts = {};
+    dets.forEach((d) => { counts[d.class] = (counts[d.class] || 0) + 1; });
+    return Object.keys(counts).sort().map((k) => counts[k] + ' ' + k).join(', ');
+  }
+
+  $('pause').addEventListener('click', () => {
+    paused = !paused;
+    $('pause').textContent = paused ? 'Resume detection' : 'Pause detection';
+    log('check', paused ? 'Paused' : 'Resumed');
+  });
+
+  // ---------- render ----------
+
+  function statRows() {
+    const tensors = backendInfo ? tf.memory().numTensors : null;
+    return [
+      ['Backend', backendInfo || '–'],
+      ['Camera', video.videoWidth ? video.videoWidth + '×' + video.videoHeight : '–'],
+      ['Model load', fmtMs(stats.loadMs)],
+      ['First check', fmtMs(stats.firstMs)],
+      ['Last check', fmtMs(stats.lastMs) + (stats.lastAt ? ' at ' + clock(stats.lastAt) : '')],
+      ['Average', stats.n ? fmtMs(stats.sum / stats.n) + ' over ' + stats.n + ' (first excluded)' : '–'],
+      ['Min / max', stats.n ? fmtMs(stats.min) + ' / ' + fmtMs(stats.max) : '–'],
+      ['Tensors', tensors === null ? '–' : String(tensors)],
+      ['Failed checks', String(stats.errors)]
+    ];
+  }
+
+  function renderStats() {
+    const dl = $('stats');
+    dl.textContent = '';
+    statRows().forEach(([k, v]) => {
+      const dt = document.createElement('dt');
+      const dd = document.createElement('dd');
+      dt.textContent = k;
+      dd.textContent = v;
+      dl.appendChild(dt);
+      dl.appendChild(dd);
+    });
+  }
+
+  function renderDetections() {
+    const tbody = $('detections');
+    tbody.textContent = '';
+    if (!lastDets.length) {
+      tbody.innerHTML = '<tr><td colspan="3" class="muted">Nothing above ' + Math.round(MIN_SCORE * 100) + '%</td></tr>';
+      return;
+    }
+    lastDets.forEach((d) => {
+      const tr = document.createElement('tr');
+      const c = document.createElement('td');
+      const sw = document.createElement('span');
+      sw.className = 'swatch';
+      sw.style.background = colorFor(d.class);
+      c.appendChild(sw);
+      c.appendChild(document.createTextNode(d.class));
+      const s = document.createElement('td');
+      s.className = 'num';
+      s.textContent = Math.round(d.score * 100) + '%';
+      const b = document.createElement('td');
+      b.className = 'num';
+      b.textContent = d.bbox.map((v) => Math.round(v)).join(', ');
+      tr.appendChild(c);
+      tr.appendChild(s);
+      tr.appendChild(b);
+      tbody.appendChild(tr);
+    });
+  }
+
+  renderStats();
+
+  // ---------- visibility ----------
+
+  let hiddenAt = null;
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      hiddenAt = Date.now();
+      log('page', 'Hidden');
+      return;
+    }
+    log('page', 'Visible again' + (hiddenAt ? ' after ' + Math.round((Date.now() - hiddenAt) / 1000) + ' s' : ''));
+    hiddenAt = null;
+    if (stream && video.paused) video.play().catch((e) => log('camera', 'Resume failed: ' + errText(e)));
+  });
+
+  // ---------- report ----------
+
+  // Leaves out the topic names: anyone who knows a topic can read it.
+  function buildReport() {
+    const lines = [];
+    lines.push('Spot Watch report · ' + SW_BUILD);
+    lines.push('Time: ' + new Date().toString());
+    lines.push(platform());
+    lines.push('UA: ' + navigator.userAgent);
+    lines.push('Secure context: ' + window.isSecureContext + ' · localStorage: ' + (storageOk ? 'ok' : 'failing'));
+    lines.push('');
+    lines.push('Status:');
+    STAGES.forEach(([key, label]) => {
+      const s = statusEls[key];
+      lines.push('  ' + label + ': ' + s.state + (s.detail ? ' · ' + s.detail : ''));
+    });
+    lines.push('');
+    lines.push('Checks:');
+    statRows().forEach(([k, v]) => lines.push('  ' + k + ': ' + v));
+    lines.push('  Camera settings: ' + JSON.stringify(cameraSettings()));
+    lines.push('  Last detections: ' + (stats.ok ? summarize(lastDets) : 'none yet'));
+    lines.push('');
+    lines.push('Control topic: ' + messages.length + ' message(s) received, ' + reconnects + ' reconnect(s), last keepalive ' +
+      (lastKeepalive ? clock(lastKeepalive) : 'none'));
+    messages.forEach((m) => lines.push('  ' + clock(m.at) + (m.lagS !== null ? ' (~' + m.lagS + ' s)' : '') + ': ' + m.text.slice(0, 80)));
+    lines.push('');
+    lines.push('Errors (' + SW_errors.length + '):');
+    SW_errors.forEach((e) => lines.push('  ' + e.time + ' ' + e.msg));
+    lines.push('');
+    lines.push('Log (newest first):');
+    logEntries.slice().reverse().forEach((e) => lines.push('  ' + logLine(e)));
+    return lines.join('\n');
+  }
+
+  $('copyReport').addEventListener('click', () => {
+    const text = buildReport();
+    const box = $('reportBox');
+    box.value = text;
+    const fallback = (why) => {
+      box.hidden = false;
+      box.focus();
+      box.setSelectionRange(0, text.length);
+      $('copyResult').textContent = 'Could not copy (' + why + '). Select the text below and copy it.';
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => {
+        box.hidden = true;
+        $('copyResult').textContent = 'Report copied at ' + clock() + '.';
+      }, (e) => fallback(errText(e)));
+    } else {
+      fallback('clipboard API missing');
+    }
+  });
+
+  // ---------- start ----------
+
+  log('page', 'Loaded ' + SW_BUILD + ' · ' + platform());
+  initDetector().catch((e) => log('detector', 'Unexpected: ' + errText(e)));
+})();
+</script>
+</body>
+</html>

@@ -36,7 +36,7 @@ Everything runs as one web page in Safari on the 6s. These limits shape the desi
 
 | Constraint | What it means for the build |
 | --- | --- |
-| iPhone 6s tops out at iOS 15 | Safari 15 only. Test every API on the real device; no iOS 16+ features. |
+| iPhone 6s tops out at iOS 15 | Safari 15 only, with 15.0 as the baseline: nothing added in 15.4+ (e.g. `Array.at`, `structuredClone`, `requestVideoFrameCallback`) and no iOS 16+ features. Test every API on the real device. |
 | A9 chip, 2 GB RAM (2015) | Small detector only, one check every 1–2 s. Run detection on a crop of the spots, not the full frame. |
 | Camera access needs HTTPS | The page must be hosted (GitHub Pages or similar), not opened as a local file. |
 | No Screen Wake Lock API in iOS 15 Safari (believed added in 16.4 — verify) | Keep the screen on with Settings: Auto-Lock = Never, plus Guided Access to pin Safari. |
@@ -59,7 +59,7 @@ The app is one static HTML file with inline JS. There is no build step and no fr
 | Piece | Choice | Why |
 | --- | --- | --- |
 | Hosting | GitHub Pages (HTTPS) | Free, gives the HTTPS that camera access requires, and deploys with a push |
-| Detector | TensorFlow.js + COCO-SSD, `lite_mobilenet_v2` base, from jsDelivr | Runs in the browser and detects both cars and people. It is the smallest variant, so it suits the A9. |
+| Detector | TensorFlow.js 4.22.0 + COCO-SSD 2.2.3, `lite_mobilenet_v2` base, from jsDelivr (exact versions pinned). The model weights load from `storage.googleapis.com`, COCO-SSD's default; copying them into the repo is a Phase 4 option. | Runs in the browser and detects both cars and people. It is the smallest variant, so it suits the A9. |
 | Backend | TF.js WebGL (default) | Faster than CPU; fall back to CPU if WebGL fails on the device |
 | Push | ntfy.sh, published with a plain POST from the page | No server or account needed; the ntfy app on the main iPhone subscribes to the topic |
 | Storage | localStorage | Keeps the spot boxes, topic and settings across page reloads |
@@ -203,7 +203,7 @@ The MVP proves the core loop: two spots, a FREE alert, a person-based heads-up, 
 
 Build in five phases, and test each one on the real 6s before starting the next. Phase 0 is the riskiest, so it comes first.
 
-1. **Phase 0 — Feasibility spike (on device).** A bare page on GitHub Pages: open the camera, load COCO-SSD, log detections and ms per check, send one ntfy test alert, and receive one message from a control topic.
+1. **Phase 0 — Feasibility spike (on device).** A bare page on GitHub Pages: open the camera, load COCO-SSD, log detections and ms per check, send one ntfy test alert, and receive one message from a control topic. It also draws the raw detection boxes on the video (so it's clear which car was found), has a WebGL/CPU switch, and has a Copy report button for sending results back.
    - Exit: TF.js runs in Safari 15 on the 6s; one check takes under \~1.5 s; the push arrives on the main phone; a control-topic message reaches the 6s; cars are detected from the real window.
 2. **Phase 1 — Spot setup.** Live view with overlay, drawing two spot boxes, saving them as fractions in localStorage, and drawing debug boxes.
    - Exit: boxes survive reloads and line up with the video in portrait and landscape.
