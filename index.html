@@ -118,7 +118,7 @@
 <script>
   // Runs before the libraries and the main script, so load failures and
   // syntax errors still reach the screen (the phone has no console).
-  var SW_BUILD = 'phase2 · 2026-11-02 · 2';
+  var SW_BUILD = 'phase2 · 2026-11-02 · 3';
   var SW_errors = [];
   document.getElementById('build').textContent = SW_BUILD;
 
@@ -172,10 +172,15 @@
       <option value="webgl">WebGL</option>
       <option value="cpu">CPU</option>
     </select>
+    <select id="model" aria-label="Detection model">
+      <option value="coco-ssd">COCO-SSD lite</option>
+      <option value="yolov8n">YOLOv8n 640</option>
+    </select>
   </div>
   <div class="row">
     <button id="draw1" type="button" disabled>Draw spot 1</button>
     <button id="draw2" type="button" disabled>Draw spot 2</button>
+    <button id="draw3" type="button" disabled>Draw spot 3</button>
     <button id="drawCancel" type="button" hidden>Cancel</button>
     <label class="check"><input type="checkbox" id="debugBoxes"> Debug boxes</label>
   </div>
@@ -272,7 +277,23 @@
   'use strict';
 
   const NTFY = 'https://ntfy.sh';
+  const SPOT_COUNT = 3;
   const MAX_BOXES = 20;
+  const MODELS = { 'coco-ssd': 'COCO-SSD lite', 'yolov8n': 'YOLOv8n 640' };
+  // YOLOv8n (Ultralytics, GPL-3.0): a TF.js export with a fixed 640×640 input,
+  // served by jsDelivr from a GitHub repo and pinned to one commit.
+  const YOLO_URL = 'https://cdn.jsdelivr.net/gh/Hyuto/yolov8-tfjs@b6a8bc691c0c1897802373d7da65dc889af1f451/public/yolov8n_web_model/model.json';
+  const YOLO_INPUT = 640;
+  const YOLO_IOU = 0.45;          // non-max suppression merges boxes that overlap more than this
+  const COCO_CLASSES = ('person,bicycle,car,motorcycle,airplane,bus,train,truck,boat,traffic light,' +
+    'fire hydrant,stop sign,parking meter,bench,bird,cat,dog,horse,sheep,cow,elephant,bear,zebra,' +
+    'giraffe,backpack,umbrella,handbag,tie,suitcase,frisbee,skis,snowboard,sports ball,kite,' +
+    'baseball bat,baseball glove,skateboard,surfboard,tennis racket,bottle,wine glass,cup,fork,' +
+    'knife,spoon,bowl,banana,apple,sandwich,orange,broccoli,carrot,hot dog,pizza,donut,cake,chair,' +
+    'couch,potted plant,bed,dining table,toilet,tv,laptop,mouse,remote,keyboard,cell phone,' +
+    'microwave,oven,toaster,sink,refrigerator,book,clock,vase,scissors,teddy bear,hair drier,' +
+    'toothbrush').split(',');
+  const HEARTBEAT_MS = 100;       // main-thread load timer, see mainThreadLoad()
   const MAX_INPUT_PX = 640;       // the crop's longer side is scaled down to this
   const CROP_MARGIN = 0.5;        // margin around the spots, as a share of their combined size
   const CROP_MIN_MARGIN = 0.05;   // ...but at least this share of the frame
@@ -910,7 +931,7 @@
   // Each spot is { x, y, w, h } as fractions (0–1) of the video frame, plus the
   // orientation the frame had when it was drawn. iOS rotates the camera picture
   // with the phone, so a spot only applies while the frame has that orientation.
-  let spots = [null, null];
+  let spots = new Array(SPOT_COUNT).fill(null);
   let drawingSpot = -1;           // index of the spot being drawn, -1 when not drawing
   let drag = null;                // { id, x0, y0, x1, y1 } in frame fractions while dragging
   let debugBoxes = load('debugBoxes', '1') === '1';
@@ -923,7 +944,8 @@
       coverage: null, person: false, personRun: 0, clearRun: 0, personVisit: false
     };
   }
-  let tracks = [freshTrack(), freshTrack()];
+  function freshTracks() { return spots.map(() => freshTrack()); }
+  let tracks = freshTracks();
 
   function frameOrientation() {
     return video.videoWidth >= video.videoHeight ? 'landscape' : 'portrait';
@@ -973,7 +995,7 @@
     let text = parts.join(' · ');
     if (hiddenIn) text = 'Drawn in ' + hiddenIn + ', phone is in ' + orient + '. Rotate back or redraw. (' + text + ')';
     if (orient && !active) text += ' · Detecting on the full frame, states paused.';
-    setStatus('spots', hiddenIn ? 'warn' : spots[0] && spots[1] ? 'ok' : 'idle', text);
+    setStatus('spots', hiddenIn ? 'warn' : spots.every(Boolean) ? 'ok' : 'idle', text);
   }
 
   function isActive(s) {
@@ -1081,8 +1103,7 @@
 
   function setDrawButtons() {
     const live = !!(track && track.readyState === 'live' && video.videoWidth > 0);
-    $('draw1').disabled = !live || drawingSpot >= 0;
-    $('draw2').disabled = !live || drawingSpot >= 0;
+    spots.forEach((_, i) => { $('draw' + (i + 1)).disabled = !live || drawingSpot >= 0; });
     $('drawCancel').hidden = drawingSpot < 0;
   }
 
@@ -1172,8 +1193,7 @@
     if (drawingSpot >= 0) e.preventDefault();
   }, { passive: false });
 
-  $('draw1').addEventListener('click', () => startDrawing(0));
-  $('draw2').addEventListener('click', () => startDrawing(1));
+  spots.forEach((_, i) => $('draw' + (i + 1)).addEventListener('click', () => startDrawing(i)));
   $('drawCancel').addEventListener('click', () => stopDrawing('Cancelled.'));
 
   const debugToggle = $('debugBoxes');
@@ -1222,7 +1242,7 @@
     const orient = frameOrientation();
     if (lastOrient && orient !== lastOrient) {
       log('camera', 'Frame is now ' + video.videoWidth + '×' + video.videoHeight + ' (' + orient + ')');
-      tracks = [freshTrack(), freshTrack()];
+      tracks = freshTracks();
       lastCrop = null;
       if (drag) {
         drag = null;
@@ -1337,6 +1357,48 @@
     location.reload();
   });
 
+  const modelKey = load('model', 'coco-ssd') === 'yolov8n' ? 'yolov8n' : 'coco-ssd';
+  const modelSel = $('model');
+  modelSel.value = modelKey;
+  modelSel.addEventListener('change', () => {
+    save('model', modelSel.value);
+    location.reload();
+  });
+
+  // Wraps the YOLOv8n graph model in COCO-SSD's detect() shape:
+  // [{ class, score, bbox: [x, y, w, h] }] in the input canvas's pixels.
+  async function loadYolo() {
+    const graph = await tf.loadGraphModel(YOLO_URL);
+    return { detect: (canvas, maxBoxes, minScore) => detectYolo(graph, canvas, maxBoxes, minScore) };
+  }
+
+  // The canvas is padded to a square (bottom and right) and resized to 640×640.
+  // The output is [1, 84, 8400]: for each candidate box, its centre x, centre y,
+  // width and height in input pixels, then a score for each of the 80 classes.
+  async function detectYolo(graph, canvas, maxBoxes, minScore) {
+    const w = canvas.width, h = canvas.height, side = Math.max(w, h);
+    const [boxes, scores, classes] = tf.tidy(() => {
+      const img = tf.browser.fromPixels(canvas).toFloat();
+      const square = img.pad([[0, side - h], [0, side - w], [0, 0]]);
+      const input = tf.image.resizeBilinear(square, [YOLO_INPUT, YOLO_INPUT]).div(255).expandDims(0);
+      const out = graph.execute(input).squeeze([0]).transpose([1, 0]);   // [8400, 84]
+      const [cx, cy, bw, bh] = tf.split(out.slice([0, 0], [-1, 4]), 4, 1);
+      const cls = out.slice([0, 4], [-1, -1]);
+      const corners = tf.concat([cy.sub(bh.div(2)), cx.sub(bw.div(2)), cy.add(bh.div(2)), cx.add(bw.div(2))], 1);
+      return [corners, cls.max(1), cls.argMax(1)];
+    });
+    const keep = await tf.image.nonMaxSuppressionAsync(boxes, scores, maxBoxes, YOLO_IOU, minScore);
+    const picked = [boxes.gather(keep), scores.gather(keep), classes.gather(keep)];
+    const [b, s, c] = await Promise.all(picked.map((t) => t.array()));
+    tf.dispose([boxes, scores, classes, keep].concat(picked));
+    const k = side / YOLO_INPUT;    // canvas pixels per input pixel
+    return b.map((r, i) => {
+      const x1 = Math.max(0, r[1] * k), y1 = Math.max(0, r[0] * k);
+      const x2 = Math.min(w, r[3] * k), y2 = Math.min(h, r[2] * k);
+      return { class: COCO_CLASSES[c[i]] || 'class ' + c[i], score: s[i], bbox: [x1, y1, x2 - x1, y2 - y1] };
+    });
+  }
+
   function backendDetail() {
     const name = tf.getBackend();
     if (name !== 'webgl') return name;
@@ -1380,22 +1442,22 @@
     log('backend', 'Using ' + backendInfo);
     renderStats();
 
-    if (typeof cocoSsd === 'undefined') {
+    if (modelKey === 'coco-ssd' && typeof cocoSsd === 'undefined') {
       setStatus('model', 'fail', 'COCO-SSD did not load (see errors)');
       return;
     }
-    setStatus('model', 'pending', 'Downloading lite_mobilenet_v2…');
+    setStatus('model', 'pending', 'Downloading ' + MODELS[modelKey] + '…');
     const t0 = performance.now();
     try {
-      model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+      model = modelKey === 'yolov8n' ? await loadYolo() : await cocoSsd.load({ base: 'lite_mobilenet_v2' });
     } catch (e) {
       setStatus('model', 'fail', errText(e));
-      log('model', 'Load failed: ' + errText(e));
+      log('model', MODELS[modelKey] + ' load failed: ' + errText(e));
       return;
     }
     stats.loadMs = performance.now() - t0;
-    setStatus('model', 'ok', 'lite_mobilenet_v2 loaded in ' + fmtMs(stats.loadMs));
-    log('model', 'Loaded in ' + fmtMs(stats.loadMs));
+    setStatus('model', 'ok', MODELS[modelKey] + ' loaded in ' + fmtMs(stats.loadMs));
+    log('model', MODELS[modelKey] + ' loaded in ' + fmtMs(stats.loadMs));
     renderStats();
     startLoop();
   }
@@ -1485,8 +1547,51 @@
 
   async function runCheck() {
     const started = performance.now();
-    if (!paused && cameraLive()) await check();
+    if (!paused && cameraLive()) {
+      await check();
+      if (prevCheckStart !== null) {
+        recentChecks.push([performance.now() - started, started - prevCheckStart]);
+        if (recentChecks.length > 20) recentChecks.shift();
+      }
+      prevCheckStart = started;
+    } else {
+      prevCheckStart = null;
+    }
     setTimeout(runCheck, Math.max(0, cfg.interval - (performance.now() - started)));
+  }
+
+  // Load stand-ins: Safari gives pages no CPU or GPU %.
+  // Detector busy is the share of time spent inside checks over the last 20.
+  const recentChecks = [];        // [ms, period since the previous check started]
+  let prevCheckStart = null;
+  function detectorBusy() {
+    let ms = 0, period = 0;
+    recentChecks.forEach((r) => { ms += r[0]; period += r[1]; });
+    return period ? Math.min(100, Math.round(100 * ms / period)) : null;
+  }
+
+  // Main-thread load: a 100 ms timer fires late by however long the page's
+  // thread was busy, so its total lateness over the last ~10 s approximates load.
+  const beats = [];               // [gap, late] for the last 100 heartbeats
+  let lastBeat = performance.now();
+  setInterval(() => {
+    const now = performance.now();
+    const gap = now - lastBeat;
+    lastBeat = now;
+    if (gap > 5000) return;       // the page was hidden: a pause, not load
+    beats.push([gap, Math.max(0, gap - HEARTBEAT_MS)]);
+    if (beats.length > 100) beats.shift();
+  }, HEARTBEAT_MS);
+  function mainThreadLoad() {
+    let late = 0, gap = 0;
+    beats.forEach((b) => { gap += b[0]; late += b[1]; });
+    return gap ? Math.min(100, Math.round(100 * late / gap)) : null;
+  }
+
+  function gpuMemory(mem) {
+    if (!mem || mem.numBytesInGPU === undefined) return '–';
+    return Math.round(mem.numBytesInGPU / 1e6) + ' MB in use' +
+      (mem.numBytesInGPUAllocated !== undefined ? ' · ' + Math.round(mem.numBytesInGPUAllocated / 1e6) + ' MB allocated' : '');
   }
 
   async function check() {
@@ -1564,8 +1669,10 @@
   // ---------- render ----------
 
   function statRows() {
-    const tensors = backendInfo ? tf.memory().numTensors : null;
+    const mem = backendInfo ? tf.memory() : null;
+    const busy = detectorBusy(), main = mainThreadLoad();
     return [
+      ['Model', MODELS[modelKey]],
       ['Backend', backendInfo || '–'],
       ['Camera', video.videoWidth ? video.videoWidth + '×' + video.videoHeight : '–'],
       ['Model load', fmtMs(stats.loadMs)],
@@ -1576,7 +1683,10 @@
       ['Brightness', brightness === null ? '–' : Math.round(brightness) + '/255' + (lowLight ? ' · low light' : '')],
       ['Night boost', !nightBoost ? 'off' : lastBoost
         ? 'on · levels ' + lastBoost.lo + '–' + lastBoost.hi + ' · gain ×' + lastBoost.gain.toFixed(1) : 'on'],
-      ['Tensors', tensors === null ? '–' : String(tensors)],
+      ['Tensors', mem ? String(mem.numTensors) : '–'],
+      ['Detector busy', busy === null ? '–' : busy + '% of the time (last ' + recentChecks.length + ' checks)'],
+      ['Main thread', main === null ? '–' : main + '% busy (last ~10 s)'],
+      ['GPU memory', gpuMemory(mem)],
       ['Failed checks', String(stats.errors)]
     ];
   }

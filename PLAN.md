@@ -4,7 +4,7 @@ Nov 2, 2026 · @Ahmed
 
 ## Goal
 
-An old iPhone 6s in the front window watches the two parking spots in front of the triplex. It pushes an alert to Ahmed's main phone before a spot opens, not only after.
+An old iPhone 6s in the front window watches the three parking spots in front of the triplex (two at first; a third was added during Phase 2). It pushes an alert to Ahmed's main phone before a spot opens, not only after.
 
 The core problem is timing. A free spot gets taken within seconds by someone already circling. An alert that fires only once the spot is empty is too late. The real value is the early warning: someone walks up to a parked car, so it may leave soon.
 
@@ -59,7 +59,7 @@ The app is one static HTML file with inline JS. There is no build step and no fr
 | Piece | Choice | Why |
 | --- | --- | --- |
 | Hosting | GitHub Pages (HTTPS) | Free, gives the HTTPS that camera access requires, and deploys with a push |
-| Detector | TensorFlow.js 4.22.0 + COCO-SSD 2.2.3, `lite_mobilenet_v2` base, from jsDelivr (exact versions pinned). The model weights load from `storage.googleapis.com`, COCO-SSD's default; copying them into the repo is a Phase 4 option. | Runs in the browser and detects both cars and people. It is the smallest variant, so it suits the A9. |
+| Detector | TensorFlow.js 4.22.0, plus a model picked on the page: **COCO-SSD 2.2.3** (`lite_mobilenet_v2` base, from jsDelivr; its 18 MB of weights load from `storage.googleapis.com`) or **YOLOv8n 640** (Ultralytics, GPL-3.0; a 12.8 MB TF.js export served by jsDelivr from the `Hyuto/yolov8-tfjs` GitHub repo, pinned to commit `b6a8bc6`). All versions are pinned. YOLOv8n is far more accurate on the COCO benchmark (mAP ~37 vs ~22) but needs about 10× the work per check; which one stays is decided by the device comparison. Copying weights into the repo is a Phase 4 option. | Runs in the browser and detects both cars and people. It is the smallest variant, so it suits the A9. |
 | Backend | TF.js WebGL (default) | Faster than CPU; fall back to CPU if WebGL fails on the device |
 | Push | ntfy.sh, published with a plain POST from the page | No server or account needed; the ntfy app on the main iPhone subscribes to the topic |
 | Storage | localStorage | Keeps the spot boxes, topic and settings across page reloads |
@@ -68,8 +68,8 @@ The app is one static HTML file with inline JS. There is no build step and no fr
 **Key decisions**
 
 - Use the phone-only version (Option A); a home computer running Python/YOLO is the fallback if detection quality is too weak.
-- Detect on a crop around the two spots plus a margin, not the full frame. Distant cars are bigger to the model, and it does less work.
-- Mark spots by hand by dragging two boxes on the live view. No automatic spot detection.
+- Detect on a crop around the spots plus a margin, not the full frame. Distant cars are bigger to the model, and it does less work.
+- Mark spots by hand by dragging three boxes on the live view. No automatic spot detection.
 - Send ntfy options as query parameters (`?title=…&priority=…&tags=…`) with a `text/plain` body. This keeps the request "simple" and avoids a CORS preflight. Confirmed in Phase 0.
 
 ## Detection and state logic
@@ -78,7 +78,7 @@ Each check decides, per spot, whether a vehicle covers it and whether a person i
 
 **Each check (every `interval` ms, waiting for the previous one to finish)**
 
-1. Grab the current video frame. Crop it to the union of the two spot boxes plus a margin (50% of the union's size on each side, at least 5% of the frame), and scale the crop down to 640 px max.
+1. Grab the current video frame. Crop it to the union of the spot boxes plus a margin (50% of the union's size on each side, at least 5% of the frame), and scale the crop down to 640 px max.
 2. Run COCO-SSD on the crop and map the boxes back to full-frame coordinates.
 3. For each spot:
    - **coverage** = the largest intersection of any vehicle box (`car`, `truck`, `bus`, `motorcycle`) with the spot box, divided by the spot box's area.
@@ -162,15 +162,16 @@ One screen, built to work in both portrait and landscape: the live camera with a
 - The live video fills the width, but never takes more than about 85% of the window height, so a whole spot can be drawn without scrolling (this matters in landscape). A transparent canvas on top draws the spot boxes, colored by state: green = vacant, red = occupied, grey = unknown.
 - Each box is labeled with its spot number and current coverage %.
 - An optional debug mode draws the raw detection boxes (vehicles and people) for tuning. It is on by default during setup and saved in localStorage.
-- To draw a spot, tap "Draw spot 1/2", then drag on the video. The overlay accepts touches only while drawing, so the page still scrolls normally.
+- To draw a spot, tap "Draw spot 1/2/3", then drag on the video. The overlay accepts touches only while drawing, so the page still scrolls normally.
 
 **Panel**
 
-- Buttons: Start, Pause/Resume, Draw spot 1, Draw spot 2, Test alert, Export CSV, Hunt on/off (a local override for testing).
+- Buttons: Start, Pause/Resume, Draw spot 1, Draw spot 2, Draw spot 3, Test alert, Export CSV, Hunt on/off (a local override for testing).
 - Hunting status: on/off, when it ends (timeout or quiet hours), and the last command received.
 - Per spot: state, coverage %, person near (yes/no).
 - Settings: alert topic and control topic (each with a subscribe link), interval, `minScore`, `occThresh`, `confirmN`, `hintN`, person margin, hunting timeout, quiet-hours start and end, lights hint on/off, debug boxes on/off.
-- Status line: TF.js backend, ms per check, last check time, log row count.
+- Status line: model, TF.js backend, ms per check, last check time, log row count.
+- Load: Safari gives pages no CPU or GPU %, so the page shows stand-ins: detector busy % (share of time spent inside checks over the last 20), main-thread load % (how late a 100 ms timer fires, over ~10 s) and GPU memory used by TF.js.
 - A rolling on-screen view of the last \~50 events; the full history is in the event log.
 
 All settings are saved to localStorage on change. On load, if spots are already set, the page tries to start on its own.
@@ -189,11 +190,11 @@ All settings are saved to localStorage on change. On load, if spots are already 
 
 - All detection runs on the phone. No frames or images are stored or sent anywhere.
 - Only short text alerts leave the device.
-- No plate reading or identification; the frame is aimed tightly at the two spots.
+- No plate reading or identification; the frame is aimed tightly at the spots.
 
 **Physical setup checklist**
 
-- [ ] Pick the window with the clearest view of both spots, ideally slightly elevated (2nd/3rd floor helps).
+- [ ] Pick the window with the clearest view of all three spots, ideally slightly elevated (2nd/3rd floor helps).
 - [ ] Mount the phone so it can't shift (a suction or clamp mount); a moved camera breaks the spot boxes.
 - [ ] Use the rear camera, with the lens close to the glass to cut reflections.
 - [ ] Route a charger to the mount.
@@ -201,11 +202,11 @@ All settings are saved to localStorage on change. On load, if spots are already 
 
 ## Scope: MVP vs later
 
-The MVP proves the core loop: two spots, a FREE alert, a person-based heads-up, and a page that keeps running unattended.
+The MVP proves the core loop: three spots, a FREE alert, a person-based heads-up, and a page that keeps running unattended.
 
 | In the MVP | Later, if the MVP works |
 | --- | --- |
-| Two hand-drawn spots | Any number of spots |
+| Three hand-drawn spots | Any number of spots |
 | FREE + heads-up (person near) alerts | Lights and door-open signals, tuned on night footage |
 | Hunting mode via iOS Shortcut + ntfy control topic, with timeout and quiet hours | Smarter auto-start of hunting (e.g. when the main phone arrives home) |
 | Event log in localStorage + Export CSV + weekly reminder | Predict departures from the log's patterns |
@@ -244,7 +245,7 @@ Test against what actually happens on the street, writing down each departure by
 | Car in the neighboring spot | Doesn't count as occupied | Raise `occThresh`, tighten the box |
 | Night, under street lighting | Parked cars are still detected | Lower frame rate, Night boost, block window reflections; then consider the Option B fallback |
 | Rain, snow on cars, fogged glass | Track the false FREE rate | Raise `confirmN` at night |
-| Snow removal day | Both spots empty and refill | Expect a burst of alerts; that's useful |
+| Snow removal day | All spots empty and refill | Expect a burst of alerts; that's useful |
 | Camera unplugged / Safari crash | Camera-stopped alert arrives | Watchdog thresholds |
 
 **What to log during tuning:** time of each real departure, time of the heads-up, time of the FREE alert, and any false alerts. Lead time = the time from heads-up to departure, which is the number that matters most.
@@ -253,7 +254,7 @@ Test against what actually happens on the street, writing down each departure by
 
 These need an answer before or during Phase 0. Most are checked on the real device, not from documentation.
 
-- [ ] Does the front window give a clear view of both spots? Which floor, and at what angle?
+- [ ] Does the front window give a clear view of all three spots? Which floor, and at what angle?
 - [x] Exact iOS version on the 6s (Settings → General → About); update to the latest 15.x if it's not already there. *iOS 15.8.5, Safari 15.6.7 (Phase 1).*
 - [x] Does TF.js 4.x with the WebGL backend run in Safari 15 on the A9? What is the real ms per check? *Yes: 373 ms average, 200 ms min (Phase 0).*
 - [ ] Can COCO-SSD `lite_mobilenet_v2` detect the cars from that distance and angle, by day and by night? *By day, yes, with a car count that varies between checks on the full frame (Phase 1). Night still to test.*
