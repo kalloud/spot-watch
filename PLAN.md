@@ -94,7 +94,7 @@ Each check decides, per spot, whether a vehicle covers it and whether a person i
 - The **FREE** alert fires only on `occupied → vacant`, never on the first reading from `unknown`.
 - The **heads-up** alert fires when the spot is `occupied` and "person near" (or lights) holds for `hintN` readings in a row. It has a cooldown per spot.
 
-Spot boxes are stored as fractions (0–1) of the frame, so they survive changes in camera resolution.
+Spot boxes are stored as fractions (0–1) of the frame, so they survive changes in camera resolution. Each spot also records whether the frame was portrait or landscape when it was drawn. iOS is believed to rotate the camera picture with the phone, so a spot is only shown and used while the frame has that orientation; otherwise the Spots status row asks to rotate back or redraw.
 
 **Starting parameters (tune on real footage)**
 
@@ -145,9 +145,9 @@ One screen, built to work in both portrait and landscape: the live camera with a
 
 **Camera view**
 
-- The live video fills the width. A transparent canvas on top draws the spot boxes, colored by state: green = vacant, red = occupied, grey = unknown.
+- The live video fills the width, but never takes more than about 85% of the window height, so a whole spot can be drawn without scrolling (this matters in landscape). A transparent canvas on top draws the spot boxes, colored by state: green = vacant, red = occupied, grey = unknown.
 - Each box is labeled with its spot number and current coverage %.
-- An optional debug mode draws the raw detection boxes (vehicles and people) for tuning.
+- An optional debug mode draws the raw detection boxes (vehicles and people) for tuning. It is on by default during setup and saved in localStorage.
 - To draw a spot, tap "Draw spot 1/2", then drag on the video. The overlay accepts touches only while drawing, so the page still scrolls normally.
 
 **Panel**

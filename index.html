@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
-<title>Spot Watch · Phase 0</title>
+<title>Spot Watch · Phase 1</title>
 <style>
   :root {
     --bg: #111418; --panel: #1b2027; --line: #2c333d; --text: #e6e9ee; --muted: #8b95a3;
@@ -45,14 +45,19 @@
   .st-pending .dot { background: var(--pending); }
   .st-fail td:last-child { color: #ffb4ae; }
 
-  .video-wrap { position: relative; background: #000; border-radius: 8px; overflow: hidden; min-height: 160px; }
+  .video-wrap { position: relative; background: #000; border-radius: 8px; overflow: hidden; min-height: 160px; margin: 0 auto; }
+  .video-wrap.live { min-height: 0; }
   .video-wrap video { display: block; width: 100%; height: auto; }
   .video-wrap canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+  .video-wrap.drawing { box-shadow: 0 0 0 2px var(--pending); -webkit-user-select: none; -webkit-touch-callout: none; }
+  .video-wrap.drawing canvas { pointer-events: auto; touch-action: none; cursor: crosshair; }
   .video-wrap .placeholder { position: absolute; top: 50%; left: 0; right: 0; text-align: center; transform: translateY(-50%); color: var(--muted); }
   .video-wrap.live .placeholder { display: none; }
 
   .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
-  button, select, input {
+  label.check { display: flex; align-items: center; gap: 8px; min-height: 44px; margin: 0; font-size: 15px; color: var(--text); }
+  label.check input { width: 22px; height: 22px; margin: 0; }
+  button, select, input[type=text] {
     font: inherit; font-size: 16px; color: var(--text); background: #2b3442;
     border: 1px solid var(--line); border-radius: 8px; min-height: 44px;
   }
@@ -96,14 +101,14 @@
 </div>
 
 <header>
-  <h1>Spot Watch · Phase 0</h1>
+  <h1>Spot Watch · Phase 1</h1>
   <span class="build" id="build"></span>
 </header>
 
 <script>
   // Runs before the libraries and the main script, so load failures and
   // syntax errors still reach the screen (the phone has no console).
-  var SW_BUILD = 'phase0 · 2026-11-02 · 1';
+  var SW_BUILD = 'phase1 · 2026-11-02 · 1';
   var SW_errors = [];
   document.getElementById('build').textContent = SW_BUILD;
 
@@ -158,6 +163,13 @@
       <option value="cpu">CPU</option>
     </select>
   </div>
+  <div class="row">
+    <button id="draw1" type="button" disabled>Draw spot 1</button>
+    <button id="draw2" type="button" disabled>Draw spot 2</button>
+    <button id="drawCancel" type="button" hidden>Cancel</button>
+    <label class="check"><input type="checkbox" id="debugBoxes"> Debug boxes</label>
+  </div>
+  <div class="hint muted" id="drawHint"></div>
 </section>
 
 <section>
@@ -228,11 +240,14 @@
   const MESSAGES_MAX = 20;
   const PUBLISH_TIMEOUT_MS = 15000;
   const VEHICLES = ['car', 'truck', 'bus', 'motorcycle'];
-  const COLORS = { vehicle: '#ff9f1c', person: '#2ec4f1', other: '#9aa4b2' };
+  const COLORS = { vehicle: '#ff9f1c', person: '#2ec4f1', other: '#9aa4b2', spotUnknown: '#d0d7de' };
+  const MIN_SPOT_SIDE = 0.02;     // a drawn box narrower or shorter than 2% of the frame is a stray tap
+  const VIDEO_MAX_HEIGHT = 0.85;  // share of the window height the video may use, so a spot fits on screen
   const TOPIC_RE = /^[-_A-Za-z0-9]{1,64}$/;
   const STAGES = [
     ['https', 'HTTPS'],
     ['camera', 'Camera'],
+    ['spots', 'Spots'],
     ['backend', 'Backend'],
     ['model', 'Model'],
     ['check', 'Checks'],
@@ -560,6 +575,12 @@
     return { width: s.width, height: s.height, frameRate: s.frameRate, facingMode: s.facingMode };
   }
 
+  function cameraDetail() {
+    const s = cameraSettings();
+    return video.videoWidth + '×' + video.videoHeight + ' · ' + frameOrientation() +
+      (s.facingMode ? ' · ' + s.facingMode : '') + (s.frameRate ? ' · ' + Math.round(s.frameRate) + ' fps' : '');
+  }
+
   async function startCamera() {
     if (!window.isSecureContext) {
       setStatus('camera', 'fail', 'Needs https:// (see HTTPS row)');
@@ -570,6 +591,7 @@
       return;
     }
     $('startCamera').disabled = true;
+    stopDrawing();
     stopCamera();
     setStatus('camera', 'pending', 'Asking for the camera…');
     try {
@@ -583,21 +605,21 @@
         if (track !== thisTrack) return;
         setStatus('camera', 'fail', 'Camera track ended. Tap Restart camera.');
         log('camera', 'Track ended');
+        stopDrawing();
       });
       video.muted = true;
       video.playsInline = true;
       video.srcObject = stream;
       await video.play();
       await waitForVideo(10000);
-      $('videoWrap').className = 'video-wrap live';
-      sizeOverlay();
-      const s = cameraSettings();
-      const detail = video.videoWidth + '×' + video.videoHeight +
-        (s.facingMode ? ' · ' + s.facingMode : '') + (s.frameRate ? ' · ' + Math.round(s.frameRate) + ' fps' : '');
+      $('videoWrap').classList.add('live');
+      onFrameChange();
+      const detail = cameraDetail();
       setStatus('camera', 'ok', detail);
       log('camera', 'Started: ' + detail);
       $('startCamera').textContent = 'Restart camera';
       $('pause').disabled = false;
+      setDrawButtons();
       startLoop();
     } catch (e) {
       setStatus('camera', 'fail', cameraHint(e));
@@ -608,6 +630,206 @@
   }
 
   $('startCamera').addEventListener('click', startCamera);
+
+  // ---------- spots ----------
+
+  // Each spot is { x, y, w, h } as fractions (0–1) of the video frame, plus the
+  // orientation the frame had when it was drawn. iOS rotates the camera picture
+  // with the phone, so a spot only applies while the frame has that orientation.
+  let spots = [null, null];
+  let drawingSpot = -1;           // index of the spot being drawn, -1 when not drawing
+  let drag = null;                // { id, x0, y0, x1, y1 } in frame fractions while dragging
+  let debugBoxes = load('debugBoxes', '1') === '1';
+
+  function frameOrientation() {
+    return video.videoWidth >= video.videoHeight ? 'landscape' : 'portrait';
+  }
+  function round4(v) { return Math.round(v * 10000) / 10000; }
+  function pct(v) { return Math.round(v * 100) + '%'; }
+  function describeSpot(s) {
+    return 'x ' + pct(s.x) + ', y ' + pct(s.y) + ', w ' + pct(s.w) + ', h ' + pct(s.h) + ', ' + s.orient;
+  }
+
+  function validSpot(s) {
+    return !!s && ['x', 'y', 'w', 'h'].every((k) => typeof s[k] === 'number' && isFinite(s[k])) &&
+      s.x >= 0 && s.y >= 0 && s.w > 0 && s.h > 0 && s.x + s.w <= 1.0001 && s.y + s.h <= 1.0001 &&
+      (s.orient === 'landscape' || s.orient === 'portrait');
+  }
+
+  function loadSpots() {
+    const raw = load('spots', null);
+    if (!raw) return;
+    try {
+      const saved = JSON.parse(raw);
+      if (!Array.isArray(saved)) throw new Error('not a list');
+      spots = spots.map((_, i) => {
+        if (saved[i] == null) return null;
+        if (validSpot(saved[i])) return saved[i];
+        log('spots', 'Saved spot ' + (i + 1) + ' is invalid, ignored');
+        return null;
+      });
+    } catch (e) {
+      log('spots', 'Could not read saved spots (' + errText(e) + '), ignored');
+    }
+  }
+
+  function renderSpotsStatus() {
+    const orient = video.videoWidth ? frameOrientation() : null;
+    let hiddenIn = null;
+    const parts = spots.map((s, i) => {
+      if (!s) return 'Spot ' + (i + 1) + ' not set';
+      if (orient && s.orient !== orient) {
+        hiddenIn = s.orient;
+        return 'Spot ' + (i + 1) + ' hidden';
+      }
+      return 'Spot ' + (i + 1) + ' set';
+    });
+    if (hiddenIn) {
+      setStatus('spots', 'warn', 'Drawn in ' + hiddenIn + ', phone is in ' + orient + '. Rotate back or redraw. (' + parts.join(' · ') + ')');
+    } else {
+      setStatus('spots', spots[0] && spots[1] ? 'ok' : 'idle', parts.join(' · '));
+    }
+  }
+
+  function setDrawButtons() {
+    const live = !!(track && track.readyState === 'live' && video.videoWidth > 0);
+    $('draw1').disabled = !live || drawingSpot >= 0;
+    $('draw2').disabled = !live || drawingSpot >= 0;
+    $('drawCancel').hidden = drawingSpot < 0;
+  }
+
+  // While drawing, the overlay takes touches (see .drawing in the CSS);
+  // the rest of the time it ignores them so the page scrolls normally.
+  function startDrawing(i) {
+    drawingSpot = i;
+    drag = null;
+    $('videoWrap').classList.add('drawing');
+    $('drawHint').textContent = 'Drag a box over spot ' + (i + 1) + ' on the video.';
+    setDrawButtons();
+    drawOverlay();
+  }
+
+  function stopDrawing(hint) {
+    drawingSpot = -1;
+    drag = null;
+    $('videoWrap').classList.remove('drawing');
+    $('drawHint').textContent = hint || '';
+    setDrawButtons();
+    drawOverlay();
+  }
+
+  function pointToFrac(e) {
+    const r = overlay.getBoundingClientRect();
+    return {
+      x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)),
+      y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))
+    };
+  }
+
+  function dragRect() {
+    return {
+      x: Math.min(drag.x0, drag.x1), y: Math.min(drag.y0, drag.y1),
+      w: Math.abs(drag.x1 - drag.x0), h: Math.abs(drag.y1 - drag.y0)
+    };
+  }
+
+  overlay.addEventListener('pointerdown', (e) => {
+    if (drawingSpot < 0 || drag) return;
+    e.preventDefault();
+    try { overlay.setPointerCapture(e.pointerId); } catch (err) { /* capture is a nicety */ }
+    const p = pointToFrac(e);
+    drag = { id: e.pointerId, x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+    drawOverlay();
+  });
+
+  overlay.addEventListener('pointermove', (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    e.preventDefault();
+    const p = pointToFrac(e);
+    drag.x1 = p.x;
+    drag.y1 = p.y;
+    drawOverlay();
+  });
+
+  overlay.addEventListener('pointerup', (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const r = dragRect();
+    const i = drawingSpot;
+    drag = null;
+    if (r.w < MIN_SPOT_SIDE || r.h < MIN_SPOT_SIDE) {
+      $('drawHint').textContent = 'Too small, not saved. Drag a bigger box over spot ' + (i + 1) + '.';
+      log('spots', 'Box for spot ' + (i + 1) + ' too small, ignored');
+      drawOverlay();
+      return;
+    }
+    spots[i] = { x: round4(r.x), y: round4(r.y), w: round4(r.w), h: round4(r.h), orient: frameOrientation() };
+    save('spots', JSON.stringify(spots));
+    log('spots', 'Spot ' + (i + 1) + ' saved: ' + describeSpot(spots[i]));
+    stopDrawing('Spot ' + (i + 1) + ' saved.');
+    renderSpotsStatus();
+  });
+
+  overlay.addEventListener('pointercancel', (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    drag = null;
+    $('drawHint').textContent = 'Drag interrupted. Try again.';
+    drawOverlay();
+  });
+
+  // Backup for iOS: keeps the page still under a drag even if
+  // `touch-action: none` is not honoured.
+  overlay.addEventListener('touchmove', (e) => {
+    if (drawingSpot >= 0) e.preventDefault();
+  }, { passive: false });
+
+  $('draw1').addEventListener('click', () => startDrawing(0));
+  $('draw2').addEventListener('click', () => startDrawing(1));
+  $('drawCancel').addEventListener('click', () => stopDrawing('Cancelled.'));
+
+  const debugToggle = $('debugBoxes');
+  debugToggle.checked = debugBoxes;
+  debugToggle.addEventListener('change', () => {
+    debugBoxes = debugToggle.checked;
+    save('debugBoxes', debugBoxes ? '1' : '0');
+    log('settings', 'Debug boxes ' + (debugBoxes ? 'on' : 'off'));
+    drawOverlay();
+  });
+
+  loadSpots();
+  renderSpotsStatus();
+
+  // ---------- layout ----------
+
+  // Keeps the whole frame on screen so a spot can be drawn without scrolling.
+  // Re-fits only when the width or the frame changes, not when Safari's
+  // toolbar shows or hides.
+  let fitKey = '';
+  function fitVideo() {
+    if (!video.videoWidth) return;
+    const key = window.innerWidth + ':' + video.videoWidth + 'x' + video.videoHeight;
+    if (key === fitKey) return;
+    fitKey = key;
+    const maxH = window.innerHeight * VIDEO_MAX_HEIGHT;
+    $('videoWrap').style.maxWidth = Math.floor(maxH * video.videoWidth / video.videoHeight) + 'px';
+  }
+
+  let lastOrient = null;
+  function onFrameChange() {
+    if (!video.videoWidth) return;
+    const orient = frameOrientation();
+    if (lastOrient && orient !== lastOrient) {
+      log('camera', 'Frame is now ' + video.videoWidth + '×' + video.videoHeight + ' (' + orient + ')');
+      if (drag) {
+        drag = null;
+        $('drawHint').textContent = 'Phone rotated mid-drag. Try again.';
+      }
+    }
+    lastOrient = orient;
+    if (statusEls.camera.state === 'ok') setStatus('camera', 'ok', cameraDetail());
+    fitVideo();
+    sizeOverlay();
+    renderSpotsStatus();
+  }
 
   // ---------- overlay ----------
 
@@ -631,8 +853,37 @@
     octx.clearRect(0, 0, overlay.width, overlay.height);
     if (!video.videoWidth || !overlay.width) return;
     const dpr = window.devicePixelRatio || 1;
-    const sx = overlay.width / video.videoWidth;
-    const sy = overlay.height / video.videoHeight;
+    const W = overlay.width, H = overlay.height;
+    const orient = frameOrientation();
+    spots.forEach((s, i) => {
+      if (s && s.orient === orient && !(drag && drawingSpot === i)) drawSpot(s, i, W, H, dpr, false);
+    });
+    if (debugBoxes) drawDetections(W / video.videoWidth, H / video.videoHeight, dpr);
+    if (drag) drawSpot(dragRect(), drawingSpot, W, H, dpr, true);
+  }
+
+  // Phase 1 has no spot state yet, so every spot is drawn as "unknown" (grey).
+  function drawSpot(s, i, W, H, dpr, inProgress) {
+    const x = s.x * W, y = s.y * H, w = s.w * W, h = s.h * H;
+    const tag = 22 * dpr;
+    octx.fillStyle = 'rgba(208, 215, 222, 0.15)';
+    octx.fillRect(x, y, w, h);
+    octx.lineWidth = 3 * dpr;
+    octx.strokeStyle = COLORS.spotUnknown;
+    octx.setLineDash(inProgress ? [8 * dpr, 6 * dpr] : []);
+    octx.strokeRect(x, y, w, h);
+    octx.setLineDash([]);
+    octx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+    octx.fillRect(x, y, tag, tag);
+    octx.fillStyle = '#fff';
+    octx.font = 'bold ' + (16 * dpr) + 'px -apple-system, Helvetica, sans-serif';
+    octx.textAlign = 'center';
+    octx.textBaseline = 'middle';
+    octx.fillText(String(i + 1), x + tag / 2, y + tag / 2 + dpr);
+    octx.textAlign = 'start';
+  }
+
+  function drawDetections(sx, sy, dpr) {
     const labelH = 16 * dpr;
     octx.lineWidth = 2 * dpr;
     octx.font = (12 * dpr) + 'px -apple-system, Helvetica, sans-serif';
@@ -652,8 +903,8 @@
   }
 
   if (window.ResizeObserver) new ResizeObserver(sizeOverlay).observe(video);
-  else window.addEventListener('resize', sizeOverlay);
-  video.addEventListener('resize', sizeOverlay);
+  window.addEventListener('resize', onFrameChange);
+  video.addEventListener('resize', onFrameChange);
 
   // ---------- TF.js backend + model ----------
 
@@ -909,6 +1160,10 @@
     statRows().forEach(([k, v]) => lines.push('  ' + k + ': ' + v));
     lines.push('  Camera settings: ' + JSON.stringify(cameraSettings()));
     lines.push('  Last detections: ' + (stats.ok ? summarize(lastDets) : 'none yet'));
+    lines.push('');
+    lines.push('Spots (frame ' + (video.videoWidth ? video.videoWidth + '×' + video.videoHeight + ' ' + frameOrientation() : 'off') +
+      ' · window ' + window.innerWidth + '×' + window.innerHeight + ' · debug boxes ' + (debugBoxes ? 'on' : 'off') + '):');
+    spots.forEach((s, i) => lines.push('  Spot ' + (i + 1) + ': ' + (s ? describeSpot(s) : 'not set')));
     lines.push('');
     lines.push('Control topic: ' + messages.length + ' message(s) received, ' + reconnects + ' reconnect(s), last keepalive ' +
       (lastKeepalive ? clock(lastKeepalive) : 'none'));
