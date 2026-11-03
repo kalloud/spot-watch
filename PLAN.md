@@ -68,7 +68,7 @@ The app is one static HTML file with inline JS. There is no build step and no fr
 **Key decisions**
 
 - Use the phone-only version (Option A); a home computer running Python/YOLO is the fallback if detection quality is too weak.
-- Detect on a crop around the spots plus a margin, not the full frame. Distant cars are bigger to the model, and it does less work.
+- Detect on zoomed views of the spots, not the full frame: each spot gets its own view (the spot plus a margin), and the views are tiled into one detector input. Distant cars are much bigger to the model. (A single crop around all spots was tried first, but with spots at both edges of the frame it was the whole frame, and a small distant car in spot 3 kept being missed.)
 - Mark spots by hand by dragging three boxes on the live view. No automatic spot detection.
 - Send ntfy options as query parameters (`?title=…&priority=…&tags=…`) with a `text/plain` body. This keeps the request "simple" and avoids a CORS preflight. Confirmed in Phase 0.
 
@@ -78,11 +78,11 @@ Each check decides, per spot, whether a vehicle covers it and whether a person i
 
 **Each check (every `interval` ms, waiting for the previous one to finish)**
 
-1. Grab the current video frame. Crop it to the union of the spot boxes plus a margin (50% of the union's size on each side, at least 5% of the frame), and scale the crop down to 640 px max.
-2. Run COCO-SSD on the crop and map the boxes back to full-frame coordinates.
+1. Grab the current video frame. Cut one view per spot: the spot plus a margin of 50% of its size on each side (at least 5% of the frame), clipped to the frame. Tile the views into a 640×640 mosaic: one view fills it, two to four share a 2×2 grid (320 px tiles). Each view is scaled to fit its tile, keeping its shape, so small spots are enlarged. With no spot drawn for the current frame shape, the whole frame is the only view.
+2. Run the detector and map the boxes back to full-frame coordinates. YOLOv8n takes the whole mosaic in one run; COCO-SSD shrinks its input to 300 px, so it gets one run per view. A box belongs to the view its centre falls in and is clipped to it; the same object found in two overlapping views (IoU > 0.5, same class) is kept once.
 3. For each spot:
    - **coverage** = the largest intersection of any vehicle box (`car`, `truck`, `bus`, `motorcycle`) with the spot box, divided by the spot box's area.
-   - **occupied reading** = coverage ≥ `occThresh`.
+   - **occupied reading** = coverage ≥ `occThresh`; once the spot is occupied, coverage ≥ half of `occThresh` (hysteresis, so coverage hovering at the line can't flip it). A complete miss still reads as vacant; `confirmN` handles those.
    - **person near** = any `person` box overlaps the spot box expanded by 35% (35% of its width added on the left and right, 35% of its height on the top and bottom).
    - **lights (experimental, off by default)** = the spot's mean brightness jumps above its slow-moving baseline by more than a set amount.
 4. Update that spot's state machine and send any alerts.
@@ -96,7 +96,7 @@ Each check decides, per spot, whether a vehicle covers it and whether a person i
 - The **FREE** alert fires only on `occupied → vacant`, never on the first reading from `unknown`.
 - The **heads-up** alert fires when the spot is `occupied` and "person near" (or lights) holds for `hintN` readings in a row. It has a cooldown per spot.
 
-Spot boxes are stored as fractions (0–1) of the frame, so they survive changes in camera resolution. Each spot also records whether the frame was portrait or landscape when it was drawn. iOS rotates the camera picture with the phone (confirmed in Phase 1: 1280×720 in landscape, 720×1280 in portrait), so a spot is only shown and used while the frame has that orientation; otherwise the Spots status row asks to rotate back or redraw.
+Spot boxes are stored as fractions (0–1) of the frame, so they survive changes in camera resolution. Each spot also records the frame shape it was drawn on: orientation plus aspect, e.g. "landscape 16:9". iOS rotates the camera picture with the phone (confirmed in Phase 1: 1280×720 in landscape, 720×1280 in portrait), and a 4:3 frame shows more above and below than 16:9, so the same fractions point elsewhere on another shape. A spot is only shown and used while the frame has its shape; otherwise the Spots status row asks to rotate back, switch the shape back, or redraw. Spots saved before the 4:3 option count as 16:9.
 
 **Starting parameters (tune on real footage)**
 
@@ -112,7 +112,7 @@ Spot boxes are stored as fractions (0–1) of the frame, so they survive changes
 
 **Low light (experimental, added during Phase 2)**
 
-Safari 15 is believed to offer no exposure-time or ISO control; Copy report lists the camera's capabilities to confirm it on the 6s. What the page can do:
+Safari 15 offers no exposure-time, ISO, zoom or torch control. Confirmed on the 6s: the camera's capabilities list only width and height (up to 4032×3024), aspect ratio, frame rate (1–30) and facing mode. What the page can do:
 
 - **Brightness:** each check measures the crop's mean brightness (0–255). Below 45 the page shows "low light", and it returns to normal above 60.
 - **Frame rate:** a 30 / 15 / 10 / 5 fps choice (saved). At a lower rate, iOS may expose each frame for longer at night; parked cars don't move, so the extra blur doesn't matter.
@@ -159,6 +159,7 @@ One screen, built to work in both portrait and landscape: the live camera with a
 
 **Camera view**
 
+- The camera frame is 16:9 (1280×720) by default, or 4:3 (1280×960, picked on the page), which keeps the sensor's full height: more picture above and below at the same width.
 - The live video fills the width, but never takes more than about 85% of the window height, so a whole spot can be drawn without scrolling (this matters in landscape). A transparent canvas on top draws the spot boxes, colored by state: green = vacant, red = occupied, grey = unknown.
 - Each box is labeled with its spot number and current coverage %.
 - An optional debug mode draws the raw detection boxes (vehicles and people) for tuning. It is on by default during setup and saved in localStorage.
@@ -256,7 +257,8 @@ These need an answer before or during Phase 0. Most are checked on the real devi
 
 - [ ] Does the front window give a clear view of all three spots? Which floor, and at what angle?
 - [x] Exact iOS version on the 6s (Settings → General → About); update to the latest 15.x if it's not already there. *iOS 15.8.5, Safari 15.6.7 (Phase 1).*
-- [x] Does TF.js 4.x with the WebGL backend run in Safari 15 on the A9? What is the real ms per check? *Yes: 373 ms average, 200 ms min (Phase 0).*
+- [x] Does TF.js 4.x with the WebGL backend run in Safari 15 on the A9? What is the real ms per check? *Yes: 373 ms average, 200 ms min (Phase 0). YOLOv8n 640: 1.0 s average (0.95–3.2 s) over 884 checks, first check 16 s, detector busy 76%, main thread 66% (Phase 2, at night, 5 fps, minScore 0.2).*
+- [ ] Which model stays, COCO-SSD lite or YOLOv8n? *YOLOv8n with minScore 0.2 held spots 1 and 2 steady for 22 minutes, but spot 3's small, distant car was found only in some checks and flipped about 50 times; per-spot views were added to fix that. To compare again with per-spot views.*
 - [ ] Can COCO-SSD `lite_mobilenet_v2` detect the cars from that distance and angle, by day and by night? *By day, yes, with a car count that varies between checks on the full frame (Phase 1). Night still to test.*
 - [x] Does ntfy accept the query-parameter publish from Safari without CORS issues, and does the ntfy iOS app deliver priority-5 alerts promptly? *Yes (Phase 0).*
 - [ ] Can the 6s hold a live subscription to the control topic (EventSource or polling) for hours, and how fast do hunt commands arrive? *EventSource receives messages (Phase 0); hours-long hold still to test.*

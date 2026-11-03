@@ -118,7 +118,7 @@
 <script>
   // Runs before the libraries and the main script, so load failures and
   // syntax errors still reach the screen (the phone has no console).
-  var SW_BUILD = 'phase2 · 2026-11-02 · 3';
+  var SW_BUILD = 'phase2 · 2026-11-02 · 4';
   var SW_errors = [];
   document.getElementById('build').textContent = SW_BUILD;
 
@@ -190,6 +190,10 @@
       <option value="15">15 fps</option>
       <option value="10">10 fps</option>
       <option value="5">5 fps</option>
+    </select>
+    <select id="aspect" aria-label="Camera frame shape">
+      <option value="16:9">16:9</option>
+      <option value="4:3">4:3 (taller)</option>
     </select>
     <label class="check"><input type="checkbox" id="nightBoost"> Night boost</label>
   </div>
@@ -294,9 +298,12 @@
     'microwave,oven,toaster,sink,refrigerator,book,clock,vase,scissors,teddy bear,hair drier,' +
     'toothbrush').split(',');
   const HEARTBEAT_MS = 100;       // main-thread load timer, see mainThreadLoad()
-  const MAX_INPUT_PX = 640;       // the crop's longer side is scaled down to this
-  const CROP_MARGIN = 0.5;        // margin around the spots, as a share of their combined size
+  const MOSAIC_PX = 640;          // detector input: one view, or a grid of views (2×2 for up to four)
+  const CROP_MARGIN = 0.5;        // margin around each spot's view, as a share of the spot's size
   const CROP_MIN_MARGIN = 0.05;   // ...but at least this share of the frame
+  const DUPLICATE_IOU = 0.5;      // the same object seen in two neighbouring views is kept once
+  const HOLD_FACTOR = 0.5;        // an occupied spot stays occupied down to this share of occThresh
+  const ASPECTS = { '16:9': [1280, 720], '4:3': [1280, 960] };   // camera frame sizes asked for
   const EVENT_LOG_MAX = 20000;    // oldest rows are dropped first
   const EVENTS_SHOWN = 50;
   const FRAME_RATES = [30, 15, 10, 5]; // lower rates may let iOS expose each frame longer at night
@@ -345,6 +352,8 @@
   const lctx = luma.getContext('2d');
   const stack = document.createElement('canvas');   // where Night boost grabs its frames, off screen
   const sctx = stack.getContext('2d');
+  const tileCanvas = document.createElement('canvas');  // one view at a time, for COCO-SSD
+  const tctx = tileCanvas.getContext('2d');
 
   // ---------- small helpers ----------
 
@@ -810,10 +819,16 @@
   let fps = Number(load('fps', '30'));
   if (FRAME_RATES.indexOf(fps) === -1) fps = 30;
 
-  // 30 fps is the camera's default, so it adds no constraint. A lower rate is
-  // asked for as a maximum first, then as a preference if that is refused.
+  let aspect = load('aspect', '16:9');
+  if (!ASPECTS[aspect]) aspect = '16:9';
+
+  // 4:3 keeps the sensor's full height, so it shows more above and below than
+  // 16:9 at the same width. 30 fps is the camera's default, so it adds no
+  // constraint; a lower rate is asked for as a maximum first, then as a
+  // preference if that is refused.
   function videoConstraints(withMax) {
-    const v = { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } };
+    const size = ASPECTS[aspect];
+    const v = { facingMode: { ideal: 'environment' }, width: { ideal: size[0] }, height: { ideal: size[1] } };
     if (fps < 30) v.frameRate = withMax ? { ideal: fps, max: fps } : { ideal: fps };
     return v;
   }
@@ -858,7 +873,7 @@
 
   function cameraDetail() {
     const s = cameraSettings();
-    return video.videoWidth + '×' + video.videoHeight + ' · ' + frameOrientation() +
+    return video.videoWidth + '×' + video.videoHeight + ' · ' + frameShape() +
       (s.facingMode ? ' · ' + s.facingMode : '') + (s.frameRate ? ' · ' + Math.round(s.frameRate) + ' fps' : '');
   }
 
@@ -926,6 +941,15 @@
     if (stream) startCamera();
   });
 
+  const aspectSel = $('aspect');
+  aspectSel.value = aspect;
+  aspectSel.addEventListener('change', () => {
+    aspect = aspectSel.value;
+    save('aspect', aspect);
+    log('camera', 'Frame shape set to ' + aspect);
+    if (stream) startCamera();
+  });
+
   // ---------- spots ----------
 
   // Each spot is { x, y, w, h } as fractions (0–1) of the video frame, plus the
@@ -950,16 +974,28 @@
   function frameOrientation() {
     return video.videoWidth >= video.videoHeight ? 'landscape' : 'portrait';
   }
+
+  // Orientation plus aspect, e.g. "landscape 16:9". The same fractions point at
+  // a different part of the street on another frame shape, so a spot only
+  // applies while the shape it was drawn on matches.
+  function shapeOf(w, h) {
+    const r = Math.max(w, h) / Math.max(1, Math.min(w, h));
+    const ratio = Math.abs(r - 16 / 9) < 0.05 ? '16:9' : Math.abs(r - 4 / 3) < 0.05 ? '4:3' : r.toFixed(2);
+    return (w >= h ? 'landscape' : 'portrait') + ' ' + ratio;
+  }
+  function frameShape() { return shapeOf(video.videoWidth, video.videoHeight); }
+  // Spots saved before the 4:3 option were all drawn on 16:9 frames.
+  function spotShape(s) { return s.shape || s.orient + ' 16:9'; }
   function round4(v) { return Math.round(v * 10000) / 10000; }
   function pct(v) { return Math.round(v * 100) + '%'; }
   function describeSpot(s) {
-    return 'x ' + pct(s.x) + ', y ' + pct(s.y) + ', w ' + pct(s.w) + ', h ' + pct(s.h) + ', ' + s.orient;
+    return 'x ' + pct(s.x) + ', y ' + pct(s.y) + ', w ' + pct(s.w) + ', h ' + pct(s.h) + ', ' + spotShape(s);
   }
 
   function validSpot(s) {
     return !!s && ['x', 'y', 'w', 'h'].every((k) => typeof s[k] === 'number' && isFinite(s[k])) &&
       s.x >= 0 && s.y >= 0 && s.w > 0 && s.h > 0 && s.x + s.w <= 1.0001 && s.y + s.h <= 1.0001 &&
-      (s.orient === 'landscape' || s.orient === 'portrait');
+      (s.orient === 'landscape' || s.orient === 'portrait') && (s.shape === undefined || typeof s.shape === 'string');
   }
 
   function loadSpots() {
@@ -980,48 +1016,41 @@
   }
 
   function renderSpotsStatus() {
-    const orient = video.videoWidth ? frameOrientation() : null;
+    const shape = video.videoWidth ? frameShape() : null;
     let hiddenIn = null;
     let active = 0;
     const parts = spots.map((s, i) => {
       if (!s) return 'Spot ' + (i + 1) + ' not set';
-      if (orient && s.orient !== orient) {
-        hiddenIn = s.orient;
+      if (shape && spotShape(s) !== shape) {
+        hiddenIn = spotShape(s);
         return 'Spot ' + (i + 1) + ' hidden';
       }
       active++;
       return 'Spot ' + (i + 1) + ' set';
     });
     let text = parts.join(' · ');
-    if (hiddenIn) text = 'Drawn in ' + hiddenIn + ', phone is in ' + orient + '. Rotate back or redraw. (' + text + ')';
-    if (orient && !active) text += ' · Detecting on the full frame, states paused.';
+    if (hiddenIn) text = 'Drawn on a ' + hiddenIn + ' frame, the camera is now ' + shape + '. Rotate back, switch the shape back, or redraw. (' + text + ')';
+    if (shape && !active) text += ' · Detecting on the full frame, states paused.';
     setStatus('spots', hiddenIn ? 'warn' : spots.every(Boolean) ? 'ok' : 'idle', text);
   }
 
   function isActive(s) {
-    return !!s && s.orient === frameOrientation();
+    return !!s && spotShape(s) === frameShape();
   }
 
-  // Where the detector looks: the active spots plus a margin of CROP_MARGIN of
-  // their combined size on each side (at least CROP_MIN_MARGIN of the frame),
-  // clipped to the frame. Null when no spot is active: the full frame is used.
-  function cropRect() {
-    const active = spots.filter(isActive);
-    if (!active.length) return null;
-    let x0 = 1, y0 = 1, x1 = 0, y1 = 0;
-    active.forEach((s) => {
-      x0 = Math.min(x0, s.x);
-      y0 = Math.min(y0, s.y);
-      x1 = Math.max(x1, s.x + s.w);
-      y1 = Math.max(y1, s.y + s.h);
+  // Where the detector looks, as fractions of the frame: one view per active
+  // spot (the spot plus a margin of CROP_MARGIN of its size on each side, at
+  // least CROP_MIN_MARGIN of the frame, clipped to the frame), or the whole
+  // frame when no spot is active.
+  function spotViews() {
+    const views = spots.filter(isActive).map((s) => {
+      const mx = Math.max(CROP_MARGIN * s.w, CROP_MIN_MARGIN);
+      const my = Math.max(CROP_MARGIN * s.h, CROP_MIN_MARGIN);
+      const x0 = Math.max(0, s.x - mx), y0 = Math.max(0, s.y - my);
+      const x1 = Math.min(1, s.x + s.w + mx), y1 = Math.min(1, s.y + s.h + my);
+      return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
     });
-    const mx = Math.max(CROP_MARGIN * (x1 - x0), CROP_MIN_MARGIN);
-    const my = Math.max(CROP_MARGIN * (y1 - y0), CROP_MIN_MARGIN);
-    x0 = Math.max(0, x0 - mx);
-    y0 = Math.max(0, y0 - my);
-    x1 = Math.min(1, x1 + mx);
-    y1 = Math.min(1, y1 + my);
-    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+    return views.length ? views : [{ x: 0, y: 0, w: 1, h: 1 }];
   }
 
   // Coverage, occupancy and person-near for one spot, worked out in video pixels.
@@ -1038,7 +1067,7 @@
         person = true;
       }
     });
-    return { coverage: coverage, occupied: coverage >= cfg.occThresh, person: person };
+    return { coverage: coverage, person: person };
   }
 
   function overlapArea(x, y, w, h, b) {
@@ -1047,14 +1076,17 @@
     return ow > 0 && oh > 0 ? ow * oh : 0;
   }
 
-  // A spot changes state only after `confirmN` readings in a row agree.
+  // A spot changes state only after `confirmN` readings in a row agree. A
+  // reading is occupied at `occThresh` coverage, or, once the spot is occupied,
+  // down to HOLD_FACTOR of it, so coverage hovering at the line can't flip it.
   // person_near is logged only while occupied, once per visit: a visit starts
   // after `hintN` readings with a person near and ends after `hintN` without.
   function updateSpot(i, reading) {
     const t = tracks[i];
     t.coverage = reading.coverage;
     t.person = reading.person;
-    if (reading.occupied) { t.occRun++; t.vacRun = 0; } else { t.vacRun++; t.occRun = 0; }
+    const threshold = t.state === 'occupied' ? cfg.occThresh * HOLD_FACTOR : cfg.occThresh;
+    if (reading.coverage >= threshold) { t.occRun++; t.vacRun = 0; } else { t.vacRun++; t.occRun = 0; }
     const next = t.occRun >= cfg.confirmN ? 'occupied' : t.vacRun >= cfg.confirmN ? 'vacant' : null;
     if (next && next !== t.state) {
       t.state = next;
@@ -1080,12 +1112,12 @@
   function renderSpotTable() {
     const tbody = $('spotRows');
     tbody.textContent = '';
-    const orient = video.videoWidth ? frameOrientation() : null;
+    const shape = video.videoWidth ? frameShape() : null;
     spots.forEach((s, i) => {
       const t = tracks[i];
-      const shown = !!s && (!orient || s.orient === orient);
+      const shown = !!s && (!shape || spotShape(s) === shape);
       const cells = !s ? ['not set', '–', '–', '–']
-        : !shown ? ['hidden (drawn in ' + s.orient + ')', '–', '–', '–']
+        : !shown ? ['hidden (drawn on ' + spotShape(s) + ')', '–', '–', '–']
         : [t.state + (t.since ? ' since ' + clock(t.since) : ''),
            t.coverage === null ? '–' : Math.round(t.coverage * 100) + '%',
            t.coverage === null ? '–' : (t.person ? 'yes' : 'no'),
@@ -1171,7 +1203,7 @@
       drawOverlay();
       return;
     }
-    spots[i] = { x: round4(r.x), y: round4(r.y), w: round4(r.w), h: round4(r.h), orient: frameOrientation() };
+    spots[i] = { x: round4(r.x), y: round4(r.y), w: round4(r.w), h: round4(r.h), orient: frameOrientation(), shape: frameShape() };
     tracks[i] = freshTrack();
     save('spots', JSON.stringify(spots));
     log('spots', 'Spot ' + (i + 1) + ' saved: ' + describeSpot(spots[i]));
@@ -1236,20 +1268,20 @@
     $('videoWrap').style.maxWidth = Math.floor(maxH * video.videoWidth / video.videoHeight) + 'px';
   }
 
-  let lastOrient = null;
+  let lastShape = null;
   function onFrameChange() {
     if (!video.videoWidth) return;
-    const orient = frameOrientation();
-    if (lastOrient && orient !== lastOrient) {
-      log('camera', 'Frame is now ' + video.videoWidth + '×' + video.videoHeight + ' (' + orient + ')');
+    const shape = frameShape();
+    if (lastShape && shape !== lastShape) {
+      log('camera', 'Frame is now ' + video.videoWidth + '×' + video.videoHeight + ' (' + shape + ')');
       tracks = freshTracks();
-      lastCrop = null;
+      lastViews = [];
       if (drag) {
         drag = null;
         $('drawHint').textContent = 'Phone rotated mid-drag. Try again.';
       }
     }
-    lastOrient = orient;
+    lastShape = shape;
     if (statusEls.camera.state === 'ok') setStatus('camera', 'ok', cameraDetail());
     fitVideo();
     sizeOverlay();
@@ -1260,7 +1292,7 @@
   // ---------- overlay ----------
 
   let lastDets = [];
-  let lastCrop = null;            // fraction rect the detector last ran on; null for the full frame
+  let lastViews = [];             // views the detector last ran on (fractions); empty for the full frame
 
   function colorFor(cls) {
     if (VEHICLES.indexOf(cls) !== -1) return COLORS.vehicle;
@@ -1281,17 +1313,16 @@
     if (!video.videoWidth || !overlay.width) return;
     const dpr = window.devicePixelRatio || 1;
     const W = overlay.width, H = overlay.height;
-    const orient = frameOrientation();
-    if (debugBoxes && lastCrop) {
+    if (debugBoxes && lastViews.length) {
       octx.lineWidth = 1.5 * dpr;
       octx.strokeStyle = COLORS.crop;
       octx.setLineDash([6 * dpr, 4 * dpr]);
-      octx.strokeRect(lastCrop.x * W, lastCrop.y * H, lastCrop.w * W, lastCrop.h * H);
+      lastViews.forEach((v) => octx.strokeRect(v.x * W, v.y * H, v.w * W, v.h * H));
       octx.setLineDash([]);
     }
     if (debugBoxes) drawDetections(W / video.videoWidth, H / video.videoHeight, dpr);
     spots.forEach((s, i) => {
-      if (s && s.orient === orient && !(drag && drawingSpot === i)) drawSpot(s, i, W, H, dpr, tracks[i]);
+      if (isActive(s) && !(drag && drawingSpot === i)) drawSpot(s, i, W, H, dpr, tracks[i]);
     });
     if (drag) drawSpot(dragRect(), drawingSpot, W, H, dpr, null);
   }
@@ -1494,26 +1525,102 @@
     }
   }
 
-  // Night boost: averages BOOST_FRAMES frames of the crop (the scene is still,
-  // so this cuts sensor noise), then stretches the levels so the 1st–99th
-  // brightness percentiles span 0–255, with the gain capped at BOOST_MAX_GAIN.
-  async function boostFrame(cx, cy, cw, ch, w, h, vw, vh) {
-    const n = w * h * 4;
+  // Lays the views out on the MOSAIC_PX square: one view fills it, more share
+  // a grid (2×2 for up to four). Each view is scaled to fit its tile, keeping
+  // its shape, so a small spot is enlarged. Positions are in mosaic pixels;
+  // sx/sy/sw/sh is the view in video pixels and k the scale between them.
+  function mosaicLayout(views, vw, vh) {
+    const grid = Math.ceil(Math.sqrt(views.length));
+    const tile = MOSAIC_PX / grid;
+    return views.map((v, i) => {
+      const sx = Math.round(v.x * vw), sy = Math.round(v.y * vh);
+      const sw = Math.max(1, Math.round(v.w * vw)), sh = Math.max(1, Math.round(v.h * vh));
+      const k = Math.min(tile / sw, tile / sh);
+      return {
+        sx: sx, sy: sy, sw: sw, sh: sh, k: k,
+        tx: (i % grid) * tile, ty: Math.floor(i / grid) * tile,
+        dw: Math.max(1, Math.round(sw * k)), dh: Math.max(1, Math.round(sh * k))
+      };
+    });
+  }
+
+  function drawMosaic(ctx, layout) {
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, MOSAIC_PX, MOSAIC_PX);
+    layout.forEach((t) => ctx.drawImage(video, t.sx, t.sy, t.sw, t.sh, t.tx, t.ty, t.dw, t.dh));
+  }
+
+  // Runs the model over the mosaic in `frame` and returns detections in video
+  // pixels. YOLOv8n takes the whole mosaic in one run; COCO-SSD shrinks its
+  // input to 300 px, so it gets one run per view instead.
+  async function detectViews(layout) {
+    let found = [];                 // boxes in mosaic pixels
+    if (modelKey === 'yolov8n') {
+      found = await model.detect(frame, MAX_BOXES, cfg.minScore);
+    } else {
+      for (const t of layout) {
+        if (tileCanvas.width !== t.dw) tileCanvas.width = t.dw;
+        if (tileCanvas.height !== t.dh) tileCanvas.height = t.dh;
+        tctx.drawImage(frame, t.tx, t.ty, t.dw, t.dh, 0, 0, t.dw, t.dh);
+        const dets = await model.detect(tileCanvas, MAX_BOXES, cfg.minScore);
+        dets.forEach((d) => found.push({ class: d.class, score: d.score, bbox: [d.bbox[0] + t.tx, d.bbox[1] + t.ty, d.bbox[2], d.bbox[3]] }));
+      }
+    }
+    // Each box belongs to the view its centre falls in, is clipped to that
+    // view, and is mapped back to video pixels.
+    const out = [];
+    found.forEach((d) => {
+      const cx = d.bbox[0] + d.bbox[2] / 2, cy = d.bbox[1] + d.bbox[3] / 2;
+      const t = layout.find((v) => cx >= v.tx && cx < v.tx + v.dw && cy >= v.ty && cy < v.ty + v.dh);
+      if (!t) return;               // centred on padding
+      const x0 = Math.max(d.bbox[0], t.tx), y0 = Math.max(d.bbox[1], t.ty);
+      const x1 = Math.min(d.bbox[0] + d.bbox[2], t.tx + t.dw), y1 = Math.min(d.bbox[1] + d.bbox[3], t.ty + t.dh);
+      out.push({
+        class: d.class, score: d.score,
+        bbox: [t.sx + (x0 - t.tx) / t.k, t.sy + (y0 - t.ty) / t.k, (x1 - x0) / t.k, (y1 - y0) / t.k]
+      });
+    });
+    return dedupe(out);
+  }
+
+  // Views of neighbouring spots overlap, so one car can be found twice.
+  function dedupe(dets) {
+    const kept = [];
+    dets.slice().sort((a, b) => b.score - a.score).forEach((d) => {
+      if (!kept.some((k) => k.class === d.class && iou(k.bbox, d.bbox) > DUPLICATE_IOU)) kept.push(d);
+    });
+    return kept;
+  }
+
+  function iou(a, b) {
+    const inter = overlapArea(a[0], a[1], a[2], a[3], b);
+    return inter / (a[2] * a[3] + b[2] * b[3] - inter);
+  }
+
+  // Night boost: averages BOOST_FRAMES mosaics (the scene is still, so this
+  // cuts sensor noise), then stretches the levels so the 1st–99th brightness
+  // percentiles span 0–255, with the gain capped at BOOST_MAX_GAIN. Pixels
+  // black in every frame (the mosaic's padding) are left out of the percentiles.
+  async function boostFrame(layout, vw, vh) {
+    const size = MOSAIC_PX;
+    const n = size * size * 4;
     const sum = new Uint16Array(n);
     const gap = Math.max(34, 1000 / (cameraSettings().frameRate || fps));
-    if (stack.width !== w) stack.width = w;
-    if (stack.height !== h) stack.height = h;
+    if (stack.width !== size) stack.width = size;
+    if (stack.height !== size) stack.height = size;
     for (let f = 0; f < BOOST_FRAMES; f++) {
       if (f) await sleep(gap);
       if (video.videoWidth !== vw || video.videoHeight !== vh) throw new Error('Frame changed size during Night boost');
-      sctx.drawImage(video, cx, cy, cw, ch, 0, 0, w, h);
-      const d = sctx.getImageData(0, 0, w, h).data;
+      drawMosaic(sctx, layout);
+      const d = sctx.getImageData(0, 0, size, size).data;
       for (let j = 0; j < n; j++) sum[j] += d[j];
     }
-    const px = w * h;
+    let px = 0;
     const hist = new Uint32Array(256);
     for (let j = 0; j < n; j += 4) {
+      if (sum[j] + sum[j + 1] + sum[j + 2] === 0) continue;
       hist[Math.min(255, Math.floor((0.299 * sum[j] + 0.587 * sum[j + 1] + 0.114 * sum[j + 2]) / BOOST_FRAMES))]++;
+      px++;
     }
     let lo = 0, hi = 255, acc = 0;
     for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= px * 0.01) { lo = v; break; } }
@@ -1521,7 +1628,7 @@
     for (let v = 255; v >= 0; v--) { acc += hist[v]; if (acc >= px * 0.01) { hi = v; break; } }
     const gain = Math.min(BOOST_MAX_GAIN, 255 / Math.max(1, hi - lo));
     const mul = gain / BOOST_FRAMES, off = lo * gain;
-    const out = fctx.createImageData(w, h);
+    const out = fctx.createImageData(size, size);
     const o = out.data;            // clamps to 0–255 on write
     for (let j = 0; j < n; j += 4) {
       o[j] = sum[j] * mul - off;
@@ -1541,7 +1648,7 @@
     if (loopStarted || !model || !cameraLive()) return;
     loopStarted = true;
     setStatus('check', 'pending', 'First check (GPU warm-up can take a while)…');
-    log('check', 'Loop started: every ' + cfg.interval + ' ms, minScore ' + cfg.minScore + ', crop ≤' + MAX_INPUT_PX + ' px');
+    log('check', 'Loop started: every ' + cfg.interval + ' ms, minScore ' + cfg.minScore + ', one view per spot on a ' + MOSAIC_PX + ' px mosaic');
     runCheck();
   }
 
@@ -1598,29 +1705,24 @@
     const t0 = performance.now();
     try {
       const vw = video.videoWidth, vh = video.videoHeight;
-      const crop = cropRect();
-      const c = crop || { x: 0, y: 0, w: 1, h: 1 };
-      const cx = Math.round(c.x * vw), cy = Math.round(c.y * vh);
-      const cw = Math.max(1, Math.round(c.w * vw)), ch = Math.max(1, Math.round(c.h * vh));
-      const scale = Math.min(1, MAX_INPUT_PX / Math.max(cw, ch));
-      const w = Math.max(1, Math.round(cw * scale)), h = Math.max(1, Math.round(ch * scale));
-      if (frame.width !== w) frame.width = w;
-      if (frame.height !== h) frame.height = h;
-      readLight(cx, cy, cw, ch);
-      lastBoost = nightBoost ? await boostFrame(cx, cy, cw, ch, w, h, vw, vh) : null;
-      if (!lastBoost) fctx.drawImage(video, cx, cy, cw, ch, 0, 0, w, h);
-      const raw = await model.detect(frame, MAX_BOXES, cfg.minScore);
+      const views = spotViews();
+      const layout = mosaicLayout(views, vw, vh);
+      if (frame.width !== MOSAIC_PX) frame.width = MOSAIC_PX;
+      if (frame.height !== MOSAIC_PX) frame.height = MOSAIC_PX;
+      const ux0 = Math.min.apply(null, views.map((v) => v.x)), uy0 = Math.min.apply(null, views.map((v) => v.y));
+      const ux1 = Math.max.apply(null, views.map((v) => v.x + v.w)), uy1 = Math.max.apply(null, views.map((v) => v.y + v.h));
+      readLight(Math.round(ux0 * vw), Math.round(uy0 * vh),
+        Math.max(1, Math.round((ux1 - ux0) * vw)), Math.max(1, Math.round((uy1 - uy0) * vh)));
+      lastBoost = nightBoost ? await boostFrame(layout, vw, vh) : null;
+      if (!lastBoost) drawMosaic(fctx, layout);
+      const found = await detectViews(layout);
       const ms = performance.now() - t0;
 
-      // Boxes go back to full-frame video pixels. If the phone rotated while
-      // the detector ran, this check's boxes and readings are dropped.
+      // If the phone rotated while the detector ran, this check's boxes and readings are dropped.
       const rotated = video.videoWidth !== vw || video.videoHeight !== vh;
-      const kx = cw / w, ky = ch / h;
-      lastDets = rotated ? [] : raw.map((d) => ({
-        class: d.class, score: d.score,
-        bbox: [cx + d.bbox[0] * kx, cy + d.bbox[1] * ky, d.bbox[2] * kx, d.bbox[3] * ky]
-      }));
-      lastCrop = rotated ? null : crop;
+      const fullFrame = views.length === 1 && views[0].w === 1 && views[0].h === 1;
+      lastDets = rotated ? [] : found;
+      lastViews = rotated || fullFrame ? [] : views;
       if (!rotated) spots.forEach((s, i) => { if (isActive(s)) updateSpot(i, readSpot(s, lastDets)); });
       stats.lastMs = ms;
       stats.lastAt = new Date();
@@ -1767,11 +1869,11 @@
     lines.push('');
     lines.push('Checks:');
     statRows().forEach(([k, v]) => lines.push('  ' + k + ': ' + v));
-    lines.push('  Camera settings: ' + JSON.stringify(cameraSettings()) + ' · asked for ' + fps + ' fps');
+    lines.push('  Camera settings: ' + JSON.stringify(cameraSettings()) + ' · asked for ' + fps + ' fps, ' + aspect);
     lines.push('  Camera capabilities: ' + JSON.stringify(cameraCapabilities()));
     lines.push('  Last detections: ' + (stats.ok ? summarize(lastDets) : 'none yet'));
     lines.push('');
-    lines.push('Spots (frame ' + (video.videoWidth ? video.videoWidth + '×' + video.videoHeight + ' ' + frameOrientation() : 'off') +
+    lines.push('Spots (frame ' + (video.videoWidth ? video.videoWidth + '×' + video.videoHeight + ' ' + frameShape() : 'off') +
       ' · window ' + window.innerWidth + '×' + window.innerHeight + ' · debug boxes ' + (debugBoxes ? 'on' : 'off') + '):');
     spots.forEach((s, i) => {
       const t = tracks[i];
@@ -1780,7 +1882,9 @@
         (t.coverage !== null ? ' · coverage ' + Math.round(t.coverage * 100) + '% · person ' + (t.person ? 'yes' : 'no') : '') +
         ' · next ' + runText(t)));
     });
-    lines.push('  Crop: ' + (lastCrop ? 'x ' + pct(lastCrop.x) + ', y ' + pct(lastCrop.y) + ', w ' + pct(lastCrop.w) + ', h ' + pct(lastCrop.h) : 'full frame'));
+    lines.push('  Views: ' + (lastViews.length
+      ? lastViews.map((v) => 'x ' + pct(v.x) + ', y ' + pct(v.y) + ', w ' + pct(v.w) + ', h ' + pct(v.h)).join(' | ')
+      : 'full frame'));
     lines.push('Settings: ' + SETTINGS.map((s) => s.key + ' ' + cfg[s.key]).join(', '));
     lines.push('');
     lines.push('Events (' + eventRows.length + ' rows, newest first, last ' + EVENTS_SHOWN + '):');
