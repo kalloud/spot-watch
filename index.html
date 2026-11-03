@@ -118,7 +118,7 @@
 <script>
   // Runs before the libraries and the main script, so load failures and
   // syntax errors still reach the screen (the phone has no console).
-  var SW_BUILD = 'phase3 · 2026-11-02 · 1';
+  var SW_BUILD = 'phase3 · 2026-11-02 · 2';
   var SW_errors = [];
   document.getElementById('build').textContent = SW_BUILD;
 
@@ -175,6 +175,7 @@
     <select id="model" aria-label="Detection model">
       <option value="coco-ssd">COCO-SSD lite</option>
       <option value="yolov8n">YOLOv8n 640</option>
+      <option value="yolo26n">YOLO26n 640</option>
     </select>
   </div>
   <div class="row">
@@ -288,10 +289,12 @@
   const NTFY = 'https://ntfy.sh';
   const SPOT_COUNT = 3;
   const MAX_BOXES = 20;
-  const MODELS = { 'coco-ssd': 'COCO-SSD lite', 'yolov8n': 'YOLOv8n 640' };
-  // YOLOv8n (Ultralytics, GPL-3.0): a TF.js export with a fixed 640×640 input,
-  // served by jsDelivr from a GitHub repo and pinned to one commit.
+  const MODELS = { 'coco-ssd': 'COCO-SSD lite', 'yolov8n': 'YOLOv8n 640', 'yolo26n': 'YOLO26n 640' };
+  // YOLOv8n (Ultralytics, GPL-3.0) and YOLO26n (Ultralytics, AGPL-3.0): TF.js
+  // exports with a fixed 640×640 input, served by jsDelivr from GitHub repos
+  // and pinned to one commit each.
   const YOLO_URL = 'https://cdn.jsdelivr.net/gh/Hyuto/yolov8-tfjs@b6a8bc691c0c1897802373d7da65dc889af1f451/public/yolov8n_web_model/model.json';
+  const YOLO26_URL = 'https://cdn.jsdelivr.net/gh/mskmartha/yolo26tfjsUI@cc0eaa4353ac72f7855ace5d3ff16cd3746ee39b/public/yolo26n_web_model/model.json';
   const YOLO_INPUT = 640;
   const YOLO_IOU = 0.45;          // non-max suppression merges boxes that overlap more than this
   const COCO_CLASSES = ('person,bicycle,car,motorcycle,airplane,bus,train,truck,boat,traffic light,' +
@@ -1677,7 +1680,7 @@
     location.reload();
   });
 
-  const modelKey = load('model', 'yolov8n') === 'coco-ssd' ? 'coco-ssd' : 'yolov8n';
+  const modelKey = MODELS[load('model', 'yolov8n')] ? load('model', 'yolov8n') : 'yolov8n';
   const modelSel = $('model');
   modelSel.value = modelKey;
   modelSel.addEventListener('change', () => {
@@ -1716,6 +1719,40 @@
       const x1 = Math.max(0, r[1] * k), y1 = Math.max(0, r[0] * k);
       const x2 = Math.min(w, r[3] * k), y2 = Math.min(h, r[2] * k);
       return { class: COCO_CLASSES[c[i]] || 'class ' + c[i], score: s[i], bbox: [x1, y1, x2 - x1, y2 - y1] };
+    });
+  }
+
+  // YOLO26n's head is end-to-end: the output is [1, 300, 6], one row per box
+  // with its corners (x1, y1, x2, y2, in input pixels), score and class,
+  // already de-duplicated and best first, so there is no NMS step. Its top-k
+  // step needs executeAsync.
+  async function loadYolo26() {
+    const graph = await tf.loadGraphModel(YOLO26_URL);
+    return { detect: (canvas, maxBoxes, minScore) => detectYolo26(graph, canvas, maxBoxes, minScore) };
+  }
+
+  async function detectYolo26(graph, canvas, maxBoxes, minScore) {
+    const w = canvas.width, h = canvas.height, side = Math.max(w, h);
+    const input = tf.tidy(() => {
+      const square = tf.browser.fromPixels(canvas).toFloat().pad([[0, side - h], [0, side - w], [0, 0]]);
+      return tf.image.resizeBilinear(square, [YOLO_INPUT, YOLO_INPUT]).div(255).expandDims(0);
+    });
+    let out;
+    try {
+      out = await graph.executeAsync(input);
+    } finally {
+      input.dispose();
+    }
+    const outs = Array.isArray(out) ? out : [out];
+    const boxes = outs.find((t) => t.shape.length === 3);
+    const rows = boxes ? (await boxes.array())[0] : [];
+    tf.dispose(outs);
+    const k = side / YOLO_INPUT;    // canvas pixels per input pixel
+    return rows.filter((r) => r[4] >= minScore).slice(0, maxBoxes).map((r) => {
+      const x1 = Math.max(0, r[0] * k), y1 = Math.max(0, r[1] * k);
+      const x2 = Math.min(w, r[2] * k), y2 = Math.min(h, r[3] * k);
+      const c = Math.round(r[5]);
+      return { class: COCO_CLASSES[c] || 'class ' + c, score: r[4], bbox: [x1, y1, x2 - x1, y2 - y1] };
     });
   }
 
@@ -1769,7 +1806,9 @@
     setStatus('model', 'pending', 'Downloading ' + MODELS[modelKey] + '…');
     const t0 = performance.now();
     try {
-      model = modelKey === 'yolov8n' ? await loadYolo() : await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+      model = modelKey === 'yolov8n' ? await loadYolo()
+        : modelKey === 'yolo26n' ? await loadYolo26()
+        : await cocoSsd.load({ base: 'lite_mobilenet_v2' });
     } catch (e) {
       setStatus('model', 'fail', errText(e));
       log('model', MODELS[modelKey] + ' load failed: ' + errText(e));
@@ -1840,11 +1879,11 @@
   }
 
   // Runs the model over the mosaic in `frame` and returns detections in video
-  // pixels. YOLOv8n takes the whole mosaic in one run; COCO-SSD shrinks its
-  // input to 300 px, so it gets one run per view instead.
+  // pixels. The YOLO models take the whole mosaic in one run; COCO-SSD shrinks
+  // its input to 300 px, so it gets one run per view instead.
   async function detectViews(layout) {
     let found = [];                 // boxes in mosaic pixels
-    if (modelKey === 'yolov8n') {
+    if (modelKey !== 'coco-ssd') {
       found = await model.detect(frame, MAX_BOXES, cfg.minScore);
     } else {
       for (const t of layout) {
