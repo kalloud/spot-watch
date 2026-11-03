@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
-<title>Spot Watch · Phase 2</title>
+<title>Spot Watch · Phase 3</title>
 <style>
   :root {
     --bg: #111418; --panel: #1b2027; --line: #2c333d; --text: #e6e9ee; --muted: #8b95a3;
@@ -111,14 +111,14 @@
 </div>
 
 <header>
-  <h1>Spot Watch · Phase 2</h1>
+  <h1>Spot Watch · Phase 3</h1>
   <span class="build" id="build"></span>
 </header>
 
 <script>
   // Runs before the libraries and the main script, so load failures and
   // syntax errors still reach the screen (the phone has no console).
-  var SW_BUILD = 'phase2 · 2026-11-02 · 4';
+  var SW_BUILD = 'phase3 · 2026-11-02 · 1';
   var SW_errors = [];
   document.getElementById('build').textContent = SW_BUILD;
 
@@ -238,14 +238,15 @@
     <div class="hint" id="alertHint"></div>
   </div>
   <div class="row">
-    <select id="priority" aria-label="Test alert priority">
-      <option value="5">Priority 5 (max)</option>
-      <option value="4">Priority 4</option>
-      <option value="3">Priority 3 (default)</option>
-      <option value="2">Priority 2</option>
-      <option value="1">Priority 1 (min)</option>
+    <select id="alertType" aria-label="Test alert type">
+      <option value="test">Plain test · priority 3</option>
+      <option value="free">Spot FREE · priority 5</option>
+      <option value="headsup">Heads up · priority 4</option>
+      <option value="camera">Camera stopped · priority 3</option>
+      <option value="hunt">Hunting on/off · priority 2</option>
+      <option value="export">Export reminder · priority 1</option>
     </select>
-    <button id="testAlert" class="primary" type="button">Test alert</button>
+    <button id="testAlert" class="primary" type="button">Send test</button>
   </div>
   <div class="hint muted" id="publishResult"></div>
 </section>
@@ -256,6 +257,10 @@
     <label for="controlTopic">Messages sent to this topic show up below</label>
     <input type="text" id="controlTopic" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
     <div class="hint" id="controlHint"></div>
+  </div>
+  <div class="row">
+    <button id="huntToggle" type="button">Hunt on</button>
+    <span class="small muted">Same as sending "hunt on" / "hunt off" to this topic.</span>
   </div>
   <div class="hint muted" id="subscribeInfo"></div>
   <ul id="messages"></ul>
@@ -315,12 +320,33 @@
   // `interval` is start-to-start; a check never overlaps the previous one.
   const SETTINGS = [
     { key: 'interval', label: 'Interval (ms)', def: 1500, min: 500, max: 10000, int: true },
-    { key: 'minScore', label: 'minScore', def: 0.35, min: 0.1, max: 0.9 },
+    { key: 'minScore', label: 'minScore', def: 0.2, min: 0.1, max: 0.9 },
+    { key: 'personMinScore', label: 'Person minScore', def: 0.4, min: 0.1, max: 0.95 },
     { key: 'occThresh', label: 'occThresh', def: 0.35, min: 0.05, max: 0.95 },
     { key: 'confirmN', label: 'confirmN', def: 3, min: 1, max: 20, int: true },
     { key: 'hintN', label: 'hintN', def: 2, min: 1, max: 20, int: true },
-    { key: 'personMargin', label: 'Person margin', def: 0.35, min: 0, max: 2 }
+    { key: 'personMargin', label: 'Person margin', def: 0.35, min: 0, max: 2 },
+    { key: 'huntHours', label: 'Hunt timeout (h)', def: 3, min: 0.05, max: 12 },
+    { key: 'quietStart', label: 'Quiet from (h)', def: 21, min: 0, max: 23.99 },
+    { key: 'quietEnd', label: 'Quiet until (h)', def: 7, min: 0, max: 23.99 },
+    { key: 'headsupCooldown', label: 'Heads-up cooldown (min)', def: 3, min: 0, max: 60 },
+    { key: 'freeCooldown', label: 'FREE cooldown (min)', def: 2, min: 0, max: 60 },
+    { key: 'arrivalGrace', label: 'Arrival grace (min)', def: 2, min: 0, max: 30 }
   ];
+  // Alert types from PLAN.md; `sample` is the title a test of that type uses.
+  const ALERT_TYPES = {
+    test: { label: 'Plain test', priority: 3, tags: 'test_tube', sample: 'Spot Watch test' },
+    free: { label: 'Spot FREE', priority: 5, tags: 'rotating_light', sample: 'Spot 1 is FREE' },
+    headsup: { label: 'Heads up', priority: 4, tags: 'eyes', sample: 'Heads up: spot 1' },
+    camera: { label: 'Camera stopped', priority: 3, tags: 'warning', sample: 'Camera stopped' },
+    hunt: { label: 'Hunting on/off', priority: 2, tags: 'white_check_mark', sample: 'Hunting on until 22:00' },
+    export: { label: 'Export reminder', priority: 1, tags: 'floppy_disk', sample: 'Export the Spot Watch log' }
+  };
+  const ALERT_RETRY_MS = 10000;   // a failed alert is tried once more after this
+  const HUNT_TICK_MS = 15000;     // how often the timeout, quiet hours and export reminder are checked
+  const CAMERA_DEAD_TICKS = 5;    // loop ticks in a row with no usable frame before "Camera stopped"
+  const RECONNECT_MS = 5000;      // wait before reconnecting to the control topic
+  const WEEK_MS = 7 * 24 * 3600000;
   const LOG_MAX = 50;
   const MESSAGES_MAX = 20;
   const PUBLISH_TIMEOUT_MS = 15000;
@@ -338,7 +364,8 @@
     ['model', 'Model'],
     ['check', 'Checks'],
     ['events', 'Event log'],
-    ['publish', 'Test alert'],
+    ['hunting', 'Hunting'],
+    ['publish', 'Alerts'],
     ['subscribe', 'Control topic']
   ];
 
@@ -472,6 +499,7 @@
       save('cfg.' + s.key, String(v));
       log('settings', s.label + ' = ' + v);
       renderSpotTable();
+      renderHunt();
     });
     field.appendChild(label);
     field.appendChild(input);
@@ -502,13 +530,14 @@
                            : 'Not a secure page: the camera is blocked. Open the GitHub Pages https:// URL.');
   setStatus('camera', 'idle', 'Tap Start camera');
   setStatus('check', 'idle', 'Waits for camera and model');
-  setStatus('publish', 'idle', 'Not sent yet');
+  setStatus('publish', 'idle', 'No alert sent yet');
 
   // ---------- event log ----------
 
-  // Rows are [isoTime, spot, event, coveragePct, hunting]: spot is 1-based or
-  // '' for whole-page rows, coverage is '' when it doesn't apply, and hunting
-  // stays 0 until Phase 3 adds hunting mode. One localStorage key holds them all.
+  // Rows are [isoTime, spot, event, coveragePct, hunting, detail]: spot is
+  // 1-based or '' for whole-page rows, coverage is '' when it doesn't apply,
+  // hunting is 1 while hunting, and detail is free text (why a hunt ended, a
+  // person's score, whether an alert was sent). One localStorage key holds them all.
   let eventRows = [];
   let eventLogOk = true;
   let lastEventWrite = null;
@@ -524,7 +553,9 @@
     try {
       const rows = JSON.parse(raw);
       if (!Array.isArray(rows)) throw new Error('not a list');
-      eventRows = rows.filter((r) => Array.isArray(r) && r.length === 5);
+      // Rows from before Phase 3 have no detail column.
+      eventRows = rows.filter((r) => Array.isArray(r) && (r.length === 5 || r.length === 6))
+        .map((r) => r.length === 5 ? r.concat('') : r);
     } catch (e) {
       save('events.unreadable', raw);
       log('events', 'Saved event log unreadable (' + errText(e) + '); kept a copy and started a new one');
@@ -555,9 +586,9 @@
     SW_showError('Event log not saved: storage is still full after dropping old rows.');
   }
 
-  function logEvent(spot, event, coverage) {
+  function logEvent(spot, event, coverage, detail) {
     eventRows.push([new Date().toISOString(), spot === null ? '' : spot + 1, event,
-      coverage === null ? '' : Math.round(coverage * 100), 0]);
+      coverage === null ? '' : Math.round(coverage * 100), hunt.on ? 1 : 0, detail || '']);
     if (eventRows.length > EVENT_LOG_MAX) eventRows.splice(0, eventRows.length - EVENT_LOG_MAX);
     writeEventLog();
     log('event', eventText(eventRows[eventRows.length - 1]));
@@ -565,7 +596,8 @@
   }
 
   function eventText(r) {
-    return (r[1] !== '' ? 'Spot ' + r[1] + ' ' : '') + r[2] + (r[3] !== '' ? ' · ' + r[3] + '%' : '');
+    return (r[1] !== '' ? 'Spot ' + r[1] + ' ' : '') + r[2] + (r[3] !== '' ? ' · ' + r[3] + '%' : '') +
+      (r[5] ? ' · ' + r[5] : '');
   }
 
   function renderEvents() {
@@ -581,8 +613,14 @@
     setStatus('events', !eventLogOk ? 'fail' : eventRows.length ? 'ok' : 'idle', eventLogOk ? detail : detail + ' · not saving');
   }
 
+  function csvField(v) {
+    const s = String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+
   function eventCsv() {
-    return ['time,spot,event,coverage_pct,hunting'].concat(eventRows.map((r) => r.join(','))).join('\n') + '\n';
+    return ['time,spot,event,coverage_pct,hunting,detail']
+      .concat(eventRows.map((r) => r.map(csvField).join(','))).join('\n') + '\n';
   }
 
   function csvName() {
@@ -605,6 +643,7 @@
       a.remove();
       $('exportResult').textContent = clock() + ': downloading ' + name + ' (' + eventRows.length + ' rows). If nothing happens, tap Show CSV.';
       log('events', 'Exported ' + eventRows.length + ' rows as ' + name);
+      save('lastExport', String(Date.now()));
     } catch (e) {
       $('exportResult').textContent = 'Download failed (' + errText(e) + '). Tap Show CSV and copy it instead.';
       log('events', 'Export failed: ' + errText(e));
@@ -618,6 +657,7 @@
     box.focus();
     box.setSelectionRange(0, box.value.length);
     $('exportResult').textContent = eventRows.length + ' rows shown below. Select all and copy.';
+    save('lastExport', String(Date.now()));
   });
 
   loadEventLog();
@@ -699,22 +739,23 @@
     }
   }
 
-  const prioritySel = $('priority');
-  prioritySel.value = load('testPriority', '5');
-  prioritySel.addEventListener('change', () => save('testPriority', prioritySel.value));
+  const typeSel = $('alertType');
+  typeSel.value = ALERT_TYPES[load('testType', 'test')] ? load('testType', 'test') : 'test';
+  typeSel.addEventListener('change', () => save('testType', typeSel.value));
 
+  // A preview of one alert type: its real priority and tag, a "[test]" title.
   $('testAlert').addEventListener('click', async () => {
     const btn = $('testAlert');
-    const priority = prioritySel.value;
+    const a = ALERT_TYPES[typeSel.value];
     btn.disabled = true;
-    setStatus('publish', 'pending', 'Sending (priority ' + priority + ')…');
+    setStatus('publish', 'pending', 'Sending a test "' + a.label + '"…');
     const t0 = performance.now();
     try {
-      const reply = await publish(topics.alert, 'Test alert from Spot Watch, sent ' + clock() + ' (' + SW_BUILD + ')', {
-        title: 'Spot Watch test', priority: priority, tags: 'test_tube'
+      const reply = await publish(topics.alert, 'Preview of the "' + a.label + '" alert, sent ' + clock() + ' (' + SW_BUILD + ')', {
+        title: '[test] ' + a.sample, priority: a.priority, tags: a.tags
       });
       const ms = performance.now() - t0;
-      const detail = 'Accepted by ntfy in ' + fmtMs(ms) + ' · priority ' + priority + (reply.id ? ' · id ' + reply.id : '');
+      const detail = 'Test "' + a.label + '" accepted by ntfy in ' + fmtMs(ms) + ' · priority ' + a.priority + (reply.id ? ' · id ' + reply.id : '');
       setStatus('publish', 'ok', detail);
       $('publishResult').textContent = clock() + ': ' + detail + '. Now check the main phone.';
       log('publish', detail);
@@ -727,6 +768,167 @@
     }
   });
 
+  // Sends one alert, trying once more after ALERT_RETRY_MS if ntfy doesn't
+  // take it. Resolves to true once ntfy accepted it.
+  async function sendAlert(type, title, body) {
+    const a = ALERT_TYPES[type];
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        await publish(topics.alert, body, { title: title, priority: a.priority, tags: a.tags });
+        setStatus('publish', 'ok', 'Last sent: "' + title + '" at ' + clock());
+        log('alert', 'Sent "' + title + '"');
+        return true;
+      } catch (e) {
+        log('alert', '"' + title + '" failed on try ' + attempt + ': ' + errText(e));
+        if (attempt === 1) await sleep(ALERT_RETRY_MS);
+        else setStatus('publish', 'fail', '"' + title + '" not sent: ' + errText(e));
+      }
+    }
+    return false;
+  }
+
+  // ---------- hunting ----------
+
+  // FREE and heads-up alerts fire only while hunting. "hunt on" / "hunt off"
+  // on the control topic (or the button) switch it; the safety timeout or the
+  // start of quiet hours end it. It is saved, so a reload keeps it. Times are
+  // ms since the epoch.
+  let hunt = loadHunt();
+
+  function loadHunt() {
+    try {
+      const h = JSON.parse(load('hunt', 'null'));
+      if (h && typeof h.on === 'boolean') return h;
+    } catch (e) { /* unreadable: start with hunting off */ }
+    return { on: false, until: null, lastCommand: null, lastCommandAt: null };
+  }
+  function saveHunt() { save('hunt', JSON.stringify(hunt)); }
+
+  function hm(ms) {
+    const d = new Date(ms);
+    return pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+  }
+  function hoursText(h) { return pad2(Math.floor(h)) + ':' + pad2(Math.round((h % 1) * 60)); }
+
+  // Quiet hours run from quietStart to quietEnd (decimal hours, local time),
+  // across midnight when the start is later than the end. Equal values turn them off.
+  function inQuietHours(ms) {
+    const s = cfg.quietStart, e = cfg.quietEnd;
+    if (s === e) return false;
+    const d = new Date(ms);
+    const h = d.getHours() + d.getMinutes() / 60;
+    return s < e ? h >= s && h < e : h >= s || h < e;
+  }
+
+  // The next time after `ms` that the clock reads `hours`.
+  function nextAt(ms, hours) {
+    const d = new Date(ms);
+    d.setHours(Math.floor(hours), Math.round((hours % 1) * 60), 0, 0);
+    if (d.getTime() <= ms) d.setDate(d.getDate() + 1);
+    return d.getTime();
+  }
+
+  // When the current hunt ends, and why: the timeout or quiet hours, whichever comes first.
+  function huntEnd() {
+    const quiet = cfg.quietStart === cfg.quietEnd ? Infinity : nextAt(Date.now(), cfg.quietStart);
+    return quiet < hunt.until ? { at: quiet, why: 'quiet hours' } : { at: hunt.until, why: 'timeout' };
+  }
+
+  function startHunt(at, late) {
+    const until = at + cfg.huntHours * 3600000;
+    if (until <= Date.now()) {
+      log('hunt', '"hunt on" sent ' + stamp(new Date(at)) + ' had already timed out, ignored');
+      return;
+    }
+    const extended = hunt.on;
+    hunt.on = true;
+    hunt.until = until;
+    saveHunt();
+    const end = huntEnd();
+    logEvent(null, 'hunt_on', null, (extended ? 'extended' : 'started') + ', ends ' + hm(end.at) + ' (' + end.why + ')' +
+      (late ? ', sent ' + clock(new Date(at)) : ''));
+    sendAlert('hunt', 'Hunting on until ' + hm(end.at), end.why === 'quiet hours'
+      ? 'Quiet hours start at ' + hm(end.at) + '.'
+      : 'The ' + cfg.huntHours + ' h safety timeout ends it at ' + hm(end.at) + '.');
+  }
+
+  function endHunt(why) {
+    if (!hunt.on) return;
+    hunt.on = false;
+    hunt.until = null;
+    saveHunt();
+    logEvent(null, 'hunt_off', null, why);
+    sendAlert('hunt', 'Hunting off (' + why + ')', 'Spot Watch stopped hunting at ' + hm(Date.now()) + '.');
+  }
+
+  // `at` is when the command was sent, so a command replayed after a
+  // reconnect is judged by its own time, not by when it arrived.
+  function handleCommand(text, at) {
+    const cmd = String(text).trim().toLowerCase().replace(/\s+/g, ' ');
+    if (cmd !== 'hunt on' && cmd !== 'hunt off') {
+      log('control', 'Not a command, ignored: "' + String(text).slice(0, 40) + '"');
+      return;
+    }
+    const late = Date.now() - at > 60000;
+    hunt.lastCommand = cmd;
+    hunt.lastCommandAt = at;
+    saveHunt();
+    if (cmd === 'hunt off') {
+      if (hunt.on) endHunt('manual');
+      else if (!late) sendAlert('hunt', 'Hunting was already off', 'Nothing to stop.');
+    } else if (inQuietHours(at)) {
+      log('hunt', '"hunt on" refused: quiet hours');
+      if (!late) {
+        sendAlert('hunt', 'Hunt on refused: quiet hours until ' + hm(nextAt(at, cfg.quietEnd)),
+          'Quiet hours run ' + hoursText(cfg.quietStart) + '–' + hoursText(cfg.quietEnd) + '. They can be changed in Settings.');
+      }
+    } else {
+      startHunt(at, late);
+    }
+    renderHunt();
+  }
+
+  function renderHunt() {
+    const last = hunt.lastCommand ? ' · last command "' + hunt.lastCommand + '" at ' + stamp(new Date(hunt.lastCommandAt)) : '';
+    if (hunt.on) {
+      const end = huntEnd();
+      setStatus('hunting', 'ok', 'On until ' + hm(end.at) + ' (' + end.why + ')' + last);
+    } else {
+      setStatus('hunting', 'idle', 'Off' + last);
+    }
+    $('huntToggle').textContent = hunt.on ? 'Hunt off' : 'Hunt on';
+  }
+
+  // Weekly nudge to export, sent between 10:00 and 20:00, so a wiped phone
+  // loses at most a week of log.
+  function exportReminder(now) {
+    const hour = new Date(now).getHours();
+    if (hour < 10 || hour >= 20) return;
+    const lastExport = Number(load('lastExport', '0')) || 0;
+    const lastReminder = Number(load('lastReminder', '0')) || 0;
+    const first = eventRows.length ? Date.parse(eventRows[0][0]) : now;
+    if (now - Math.max(lastExport, first) < WEEK_MS || now - lastReminder < WEEK_MS) return;
+    save('lastReminder', String(now));
+    sendAlert('export', 'Export the Spot Watch log', eventRows.length + ' rows; last export ' +
+      (lastExport ? stamp(new Date(lastExport)) : 'never') + '. Open the page and tap Export CSV.');
+  }
+
+  function huntTick() {
+    const now = Date.now();
+    if (hunt.on && now >= hunt.until) endHunt('timeout');
+    else if (hunt.on && inQuietHours(now)) endHunt('quiet hours');
+    exportReminder(now);
+    renderHunt();
+  }
+
+  $('huntToggle').addEventListener('click', () => {
+    log('hunt', 'Button: ' + (hunt.on ? 'hunt off' : 'hunt on'));
+    handleCommand(hunt.on ? 'hunt off' : 'hunt on', Date.now());
+  });
+
+  huntTick();
+  setInterval(huntTick, HUNT_TICK_MS);
+
   // ---------- ntfy subscribe (control topic) ----------
 
   let es = null;
@@ -734,12 +936,19 @@
   let lastKeepalive = null;
   let retryTimer = 0;
   const messages = [];
+  const seenIds = [];             // recent control message ids, so a replayed message is handled once
 
+  // Every (re)connect asks ntfy for what was sent since the last message
+  // handled, so a command sent while the page was reloading or offline still
+  // arrives (ntfy keeps messages for 12 h). The browser's own reconnect would
+  // reuse the old URL, so drops are handled here instead.
   function subscribe() {
     clearTimeout(retryTimer);
     if (es) es.close();
     setStatus('subscribe', 'pending', 'Connecting…');
-    const source = new EventSource(NTFY + '/' + encodeURIComponent(topics.control) + '/sse');
+    const lastId = load('controlLastId', '');
+    const since = /^[A-Za-z0-9]{1,32}$/.test(lastId) ? '?since=' + lastId : '';
+    const source = new EventSource(NTFY + '/' + encodeURIComponent(topics.control) + '/sse' + since);
     es = source;
     let connected = false;
 
@@ -762,6 +971,12 @@
       let data;
       try { data = JSON.parse(e.data); } catch (err) { log('subscribe', 'Unparsable event: ' + String(e.data).slice(0, 80)); return; }
       if (data.event && data.event !== 'message') return;
+      if (data.id) {
+        if (seenIds.indexOf(data.id) !== -1) return;
+        seenIds.push(data.id);
+        if (seenIds.length > 100) seenIds.shift();
+        save('controlLastId', data.id);
+      }
       const now = Date.now();
       const lagS = data.time ? Math.max(0, Math.round(now / 1000 - data.time)) : null;
       messages.unshift({ at: new Date(now), text: data.message || '', title: data.title || '', lagS: lagS });
@@ -769,20 +984,17 @@
       renderMessages();
       setStatus('subscribe', 'ok', 'Connected · last message ' + clock() + (lagS !== null ? ' · ~' + lagS + ' s after send' : ''));
       log('control', 'Received: "' + (data.message || '').slice(0, 80) + '"' + (lagS !== null ? ' (~' + lagS + ' s after send)' : ''));
+      handleCommand(data.message || '', data.time ? data.time * 1000 : now);
     });
     source.addEventListener('error', () => {
       if (es !== source) return;
+      source.close();
       connected = false;
       reconnects++;
       renderSubscribeInfo();
-      if (source.readyState === EventSource.CLOSED) {
-        setStatus('subscribe', 'fail', 'Connection closed · retrying in 5 s');
-        log('subscribe', 'Connection closed, retrying in 5 s');
-        retryTimer = setTimeout(subscribe, 5000);
-      } else {
-        setStatus('subscribe', 'warn', 'Connection dropped · reconnecting');
-        log('subscribe', 'Connection dropped, browser is reconnecting');
-      }
+      setStatus('subscribe', 'warn', 'Connection dropped · reconnecting in ' + RECONNECT_MS / 1000 + ' s');
+      log('subscribe', 'Connection dropped, reconnecting in ' + RECONNECT_MS / 1000 + ' s');
+      retryTimer = setTimeout(subscribe, RECONNECT_MS);
     });
   }
 
@@ -808,7 +1020,12 @@
   }
 
   bindTopic('alert', 'alertTopic', null);
-  bindTopic('control', 'controlTopic', () => { messages.length = 0; renderMessages(); subscribe(); });
+  bindTopic('control', 'controlTopic', () => {
+    messages.length = 0;
+    renderMessages();
+    save('controlLastId', '');    // ids belong to the old topic
+    subscribe();
+  });
   renderSubscribeInfo();
   subscribe();
 
@@ -877,6 +1094,33 @@
       (s.facingMode ? ' · ' + s.facingMode : '') + (s.frameRate ? ' · ' + Math.round(s.frameRate) + ' fps' : '');
   }
 
+  // "Camera stopped" goes out once per outage, hunting or not. An outage is the
+  // track ending, or CAMERA_DEAD_TICKS loop ticks in a row with no usable
+  // frame. A restart in progress (permission prompt, new frame rate) isn't one.
+  let cameraStarted = false;
+  let cameraStarting = false;
+  let cameraDown = false;
+  let deadTicks = 0;
+
+  function reportCameraStopped(why) {
+    if (cameraDown) return;
+    cameraDown = true;
+    logEvent(null, 'camera_stopped', null, why);
+    sendAlert('camera', 'Camera stopped', 'Spot Watch lost its camera at ' + hm(Date.now()) + ' (' + why + '). Check the 6s.');
+  }
+
+  function cameraWatch() {
+    if (!cameraStarted || cameraStarting || paused) return;
+    if (cameraLive()) {
+      if (cameraDown) log('camera', 'Camera is back');
+      cameraDown = false;
+      deadTicks = 0;
+      return;
+    }
+    deadTicks++;
+    if (deadTicks >= CAMERA_DEAD_TICKS) reportCameraStopped('no usable frames for ' + deadTicks + ' checks');
+  }
+
   async function startCamera() {
     if (!window.isSecureContext) {
       setStatus('camera', 'fail', 'Needs https:// (see HTTPS row)');
@@ -887,6 +1131,7 @@
       return;
     }
     $('startCamera').disabled = true;
+    cameraStarting = true;
     stopDrawing();
     stopCamera();
     setStatus('camera', 'pending', 'Asking for the camera…');
@@ -905,6 +1150,7 @@
         setStatus('camera', 'fail', 'Camera track ended. Tap Restart camera.');
         log('camera', 'Track ended');
         stopDrawing();
+        reportCameraStopped('camera track ended');
       });
       video.muted = true;
       video.playsInline = true;
@@ -918,6 +1164,10 @@
       log('camera', 'Started: ' + detail + (fps < 30 ? ' (asked for ' + fps + ' fps)' : ''));
       log('camera', 'Capabilities: ' + JSON.stringify(cameraCapabilities()));
       logEvent(null, 'start', null);
+      if (cameraDown) log('camera', 'Camera is back');
+      cameraStarted = true;
+      cameraDown = false;
+      deadTicks = 0;
       $('startCamera').textContent = 'Restart camera';
       $('pause').disabled = false;
       setDrawButtons();
@@ -927,6 +1177,7 @@
       log('camera', 'Failed: ' + errText(e));
     } finally {
       $('startCamera').disabled = false;
+      cameraStarting = false;
     }
   }
 
@@ -970,6 +1221,9 @@
   }
   function freshTracks() { return spots.map(() => freshTrack()); }
   let tracks = freshTracks();
+  // When each spot last sent FREE / heads-up, for the cooldowns. Kept across
+  // redraws, so redrawing a spot can't bypass a cooldown.
+  const alertTimes = spots.map(() => ({ free: 0, headsup: 0 }));
 
   function frameOrientation() {
     return video.videoWidth >= video.videoHeight ? 'landscape' : 'portrait';
@@ -1059,15 +1313,16 @@
     const sx = s.x * fw, sy = s.y * fh, sw = s.w * fw, sh = s.h * fh;
     const mx = sw * cfg.personMargin, my = sh * cfg.personMargin;
     let coverage = 0;
-    let person = false;
+    let personScore = 0;            // best qualifying person; people need personMinScore, cars only minScore
     dets.forEach((d) => {
       if (VEHICLES.indexOf(d.class) !== -1) {
         coverage = Math.max(coverage, overlapArea(sx, sy, sw, sh, d.bbox) / (sw * sh));
-      } else if (d.class === 'person' && overlapArea(sx - mx, sy - my, sw + 2 * mx, sh + 2 * my, d.bbox) > 0) {
-        person = true;
+      } else if (d.class === 'person' && d.score >= cfg.personMinScore &&
+                 overlapArea(sx - mx, sy - my, sw + 2 * mx, sh + 2 * my, d.bbox) > 0) {
+        personScore = Math.max(personScore, d.score);
       }
     });
-    return { coverage: coverage, person: person };
+    return { coverage: coverage, person: personScore > 0, personScore: personScore };
   }
 
   function overlapArea(x, y, w, h, b) {
@@ -1089,17 +1344,51 @@
     if (reading.coverage >= threshold) { t.occRun++; t.vacRun = 0; } else { t.vacRun++; t.occRun = 0; }
     const next = t.occRun >= cfg.confirmN ? 'occupied' : t.vacRun >= cfg.confirmN ? 'vacant' : null;
     if (next && next !== t.state) {
+      const prev = t.state, prevSince = t.since;
       t.state = next;
       t.since = new Date();
       logEvent(i, next, reading.coverage);
+      if (prev === 'occupied' && next === 'vacant') onSpotFreed(i, reading.coverage, prevSince);
     }
     if (reading.person) { t.personRun++; t.clearRun = 0; } else { t.clearRun++; t.personRun = 0; }
     if (!t.personVisit && t.state === 'occupied' && t.personRun >= cfg.hintN) {
       t.personVisit = true;
-      logEvent(i, 'person_near', reading.coverage);
+      onPersonNear(i, t, reading);
     } else if (t.personVisit && t.clearRun >= cfg.hintN) {
       t.personVisit = false;
     }
+  }
+
+  // FREE fires only on occupied → vacant (never from unknown), while hunting,
+  // at most once per spot per FREE cooldown.
+  function onSpotFreed(i, coverage, occupiedSince) {
+    if (!hunt.on) return;
+    const now = Date.now();
+    if (now - alertTimes[i].free < cfg.freeCooldown * 60000) {
+      log('alert', 'Spot ' + (i + 1) + ' FREE not sent: cooldown');
+      return;
+    }
+    alertTimes[i].free = now;
+    sendAlert('free', 'Spot ' + (i + 1) + ' is FREE', 'Spot ' + (i + 1) + ' went vacant at ' + clock() +
+      (occupiedSince ? '; it had been occupied since ' + clock(occupiedSince) : '') + '.')
+      .then((ok) => logEvent(i, 'alert_free', coverage, ok ? 'sent' : 'not sent'));
+  }
+
+  // A person-near visit at an occupied spot. Heads-up goes out while hunting,
+  // except during the arrival grace (the driver who just parked getting out)
+  // and the heads-up cooldown.
+  function onPersonNear(i, t, reading) {
+    const now = Date.now();
+    let skip = '';
+    if (!hunt.on) skip = 'not hunting';
+    else if (now - t.since.getTime() < cfg.arrivalGrace * 60000) skip = 'arrival grace';
+    else if (now - alertTimes[i].headsup < cfg.headsupCooldown * 60000) skip = 'cooldown';
+    logEvent(i, 'person_near', reading.coverage, 'person ' + Math.round(reading.personScore * 100) + '%' +
+      (hunt.on && skip ? ', no alert: ' + skip : ''));
+    if (skip) return;
+    alertTimes[i].headsup = now;
+    sendAlert('headsup', 'Heads up: spot ' + (i + 1), 'Someone is at the parked car in spot ' + (i + 1) + ' (' + clock() + ').')
+      .then((ok) => logEvent(i, 'alert_headsup', reading.coverage, ok ? 'sent' : 'not sent'));
   }
 
   // Readings in a row toward a state change, e.g. "vacant 2/3".
@@ -1388,7 +1677,7 @@
     location.reload();
   });
 
-  const modelKey = load('model', 'coco-ssd') === 'yolov8n' ? 'yolov8n' : 'coco-ssd';
+  const modelKey = load('model', 'yolov8n') === 'coco-ssd' ? 'coco-ssd' : 'yolov8n';
   const modelSel = $('model');
   modelSel.value = modelKey;
   modelSel.addEventListener('change', () => {
@@ -1654,6 +1943,7 @@
 
   async function runCheck() {
     const started = performance.now();
+    cameraWatch();
     if (!paused && cameraLive()) {
       await check();
       if (prevCheckStart !== null) {

@@ -59,7 +59,7 @@ The app is one static HTML file with inline JS. There is no build step and no fr
 | Piece | Choice | Why |
 | --- | --- | --- |
 | Hosting | GitHub Pages (HTTPS) | Free, gives the HTTPS that camera access requires, and deploys with a push |
-| Detector | TensorFlow.js 4.22.0, plus a model picked on the page: **COCO-SSD 2.2.3** (`lite_mobilenet_v2` base, from jsDelivr; its 18 MB of weights load from `storage.googleapis.com`) or **YOLOv8n 640** (Ultralytics, GPL-3.0; a 12.8 MB TF.js export served by jsDelivr from the `Hyuto/yolov8-tfjs` GitHub repo, pinned to commit `b6a8bc6`). All versions are pinned. YOLOv8n is far more accurate on the COCO benchmark (mAP ~37 vs ~22) but needs about 10× the work per check; which one stays is decided by the device comparison. Copying weights into the repo is a Phase 4 option. | Runs in the browser and detects both cars and people. It is the smallest variant, so it suits the A9. |
+| Detector | TensorFlow.js 4.22.0, plus a model picked on the page: **COCO-SSD 2.2.3** (`lite_mobilenet_v2` base, from jsDelivr; its 18 MB of weights load from `storage.googleapis.com`) or **YOLOv8n 640** (Ultralytics, GPL-3.0; a 12.8 MB TF.js export served by jsDelivr from the `Hyuto/yolov8-tfjs` GitHub repo, pinned to commit `b6a8bc6`). All versions are pinned. YOLOv8n is far more accurate on the COCO benchmark (mAP ~37 vs ~22) but needs about 10× the work per check; YOLOv8n is the default since Phase 3, after it held all three spots steady with per-spot views; COCO-SSD stays selectable. Copying weights into the repo is a Phase 4 option. | Runs in the browser and detects both cars and people. It is the smallest variant, so it suits the A9. |
 | Backend | TF.js WebGL (default) | Faster than CPU; fall back to CPU if WebGL fails on the device |
 | Push | ntfy.sh, published with a plain POST from the page | No server or account needed; the ntfy app on the main iPhone subscribes to the topic |
 | Storage | localStorage | Keeps the spot boxes, topic and settings across page reloads |
@@ -93,8 +93,8 @@ Each check decides, per spot, whether a vehicle covers it and whether a person i
 - Becomes `vacant` after `confirmN` vacant readings in a row.
 - A failed check, a paused loop or a stopped camera gives no reading; it never counts as vacant.
 - A spot resets to `unknown`, without a log row, when it is redrawn or the frame orientation changes, so neither can look like a departure.
-- The **FREE** alert fires only on `occupied → vacant`, never on the first reading from `unknown`.
-- The **heads-up** alert fires when the spot is `occupied` and "person near" (or lights) holds for `hintN` readings in a row. It has a cooldown per spot.
+- The **FREE** alert fires only on `occupied → vacant`, never on the first reading from `unknown`, and at most once per spot per FREE cooldown (2 min), so a flapping spot can't send a burst.
+- The **heads-up** alert fires when the spot is `occupied` and "person near" (or lights) holds for `hintN` readings in a row. It has a cooldown per spot, and doesn't fire during the arrival grace (the first 2 min after the spot became occupied), which is the driver who just parked getting out. For person near, a person needs `personMinScore` (0.4), higher than the `minScore` cars need, because low-score people were the main source of false person-near readings at night.
 
 Spot boxes are stored as fractions (0–1) of the frame, so they survive changes in camera resolution. Each spot also records the frame shape it was drawn on: orientation plus aspect, e.g. "landscape 16:9". iOS rotates the camera picture with the phone (confirmed in Phase 1: 1280×720 in landscape, 720×1280 in portrait), and a 4:3 frame shows more above and below than 16:9, so the same fractions point elsewhere on another shape. A spot is only shown and used while the frame has its shape; otherwise the Spots status row asks to rotate back, switch the shape back, or redraw. Spots saved before the 4:3 option count as 16:9.
 
@@ -103,11 +103,14 @@ Spot boxes are stored as fractions (0–1) of the frame, so they survive changes
 | Parameter | Default | Effect |
 | --- | --- | --- |
 | `interval` | 1500 ms | Time between checks; raise it if the 6s runs hot |
-| `minScore` | 0.35 | Lowest detector confidence that counts |
+| `minScore` | 0.2 (was 0.35; 0.2 kept spots steady on YOLOv8n in Phase 2) | Lowest detector confidence that counts |
+| `personMinScore` | 0.4 | Lowest confidence for a person to count as near a car |
 | `occThresh` | 0.35 | Spot coverage needed to call it occupied; raise it if a car in the next spot over bleeds in |
 | `confirmN` | 3 | Readings in a row before a state changes (about 4.5 s); filters out passing cars |
 | `hintN` | 2 | Readings in a row of "person near" before a heads-up |
 | Heads-up cooldown | 3 min per spot | Stops repeat alerts while someone loads a trunk |
+| Arrival grace | 2 min | No heads-up this soon after a spot becomes occupied |
+| FREE cooldown | 2 min per spot | Caps FREE alerts if a spot flaps |
 | Person margin | 35% of the spot box | How close a person must be to count as "at the car" |
 
 **Low light (experimental, added during Phase 2)**
@@ -121,14 +124,14 @@ Safari 15 offers no exposure-time, ISO, zoom or torch control. Confirmed on the 
 
 **Event log (always on)**
 
-Every state change and alert is appended to a log in localStorage, whether or not hunting is on and including quiet hours. Each row records: ISO timestamp, spot, event (`start`, `occupied`, `vacant`, `person_near`, `alert_free`, `alert_headsup`, `hunt_on`, `hunt_off`, `camera_stopped`), coverage %, and hunting on/off (0/1 in the CSV).
+Every state change and alert is appended to a log in localStorage, whether or not hunting is on and including quiet hours. Each row records: ISO timestamp, spot, event (`start`, `occupied`, `vacant`, `person_near`, `alert_free`, `alert_headsup`, `hunt_on`, `hunt_off`, `camera_stopped`), coverage %, hunting on/off (0/1 in the CSV), and a free-text detail (why a hunt ended, a person's score and why no heads-up went out, whether an alert was sent). The CSV columns are `time,spot,event,coverage_pct,hunting,detail`; rows from before Phase 3 have an empty detail.
 
 - `start` is written each time the camera starts, so gaps after a reload are explainable.
 - `person_near` is written only while the spot is occupied, once per visit: a visit starts after `hintN` readings in a row with a person near and ends after `hintN` readings without one.
 
 - An **Export CSV** button downloads the full log.
 - Cap the log at about 20,000 rows and drop the oldest first, so localStorage never fills up.
-- A low-priority weekly ntfy reminder prompts the export, so a wiped phone loses at most a week of data.
+- A low-priority weekly ntfy reminder prompts the export, so a wiped phone loses at most a week of data. It goes out when 7 days have passed since the last export (or since the first log row), between 10:00 and 20:00, at most once a week.
 
 ## Alerts
 
@@ -146,10 +149,12 @@ All alerts go to one ntfy topic, which the ntfy app on Ahmed's main iPhone subsc
 
 - **Alerts fire only while hunting.** This replaces the "my car" toggle from the first draft.
 - **Switch.** An iOS Shortcut on the main iPhone POSTs `hunt on` or `hunt off` to a second ntfy topic (the control topic). The 6s listens on that topic. Put the Shortcut on the home screen, Back Tap or Siri.
-- **Catch-up.** If the 6s misses a command, it catches up on reconnect using ntfy's `since=` parameter; ntfy.sh keeps messages for 12 hours by default.
-- **What ends hunting:** manual off, a safety timeout (default 3 h after hunt on), or the start of quiet hours (default 9 pm–7 am). A hunt-on command during quiet hours is refused, with a reply saying so.
+- **Catch-up.** If the 6s misses a command, it catches up on reconnect using ntfy's `since=` parameter; ntfy.sh keeps messages for 12 hours by default. The page saves the id of the last control message it handled and always reconnects with `since=<that id>`, handling drops itself rather than relying on the browser's reconnect. A replayed command is judged by when it was sent: a `hunt on` whose timeout has already passed is ignored, and a newer one hunts until its own sent time plus the timeout.
+- **What ends hunting:** manual off, a safety timeout (default 3 h after hunt on), or the start of quiet hours (default 9 pm–7 am). A hunt-on command during quiet hours is refused, with a reply saying so. Hunting is saved, so a reload keeps it; if the page was down past the end, it ends as soon as the page is back.
+- **Replies** go to the alert topic at priority 2: "Hunting on until HH:MM" (the timeout or the start of quiet hours, whichever is first), "Hunting off (manual / timeout / quiet hours)", "Hunt on refused: quiet hours until HH:MM", "Hunting was already off".
+- **Sending.** An alert ntfy doesn't accept is tried once more after 10 s; a failure shows in the Alerts status row and the log. The page's "Send test" button previews any alert type with its real priority and tag and a "[test]" title, and a "Hunt on/off" button acts like the commands.
 - **No auto-detect of "got it".** Guessing that Ahmed took the spot fails silently if a stranger takes it, so hunting never ends on a guess.
-- **Cooldowns.** Heads-up: 3 min per spot. Camera stopped: once per outage.
+- **Cooldowns.** Heads-up: 3 min per spot, plus the 2 min arrival grace. FREE: 2 min per spot. Camera stopped: once per outage. Cooldowns survive redrawing a spot.
 
 **Topic name.** Make it long and random (e.g. `spotwatch-k3x9q2m7`). Anyone who knows a public ntfy.sh topic can read it.
 
@@ -170,7 +175,7 @@ One screen, built to work in both portrait and landscape: the live camera with a
 - Buttons: Start, Pause/Resume, Draw spot 1, Draw spot 2, Draw spot 3, Test alert, Export CSV, Hunt on/off (a local override for testing).
 - Hunting status: on/off, when it ends (timeout or quiet hours), and the last command received.
 - Per spot: state, coverage %, person near (yes/no).
-- Settings: alert topic and control topic (each with a subscribe link), interval, `minScore`, `occThresh`, `confirmN`, `hintN`, person margin, hunting timeout, quiet-hours start and end, lights hint on/off, debug boxes on/off.
+- Settings: alert topic and control topic (each with a subscribe link), interval, `minScore`, `personMinScore`, `occThresh`, `confirmN`, `hintN`, person margin, hunting timeout, quiet-hours start and end (decimal hours, e.g. 7.5 = 07:30), heads-up cooldown, FREE cooldown, arrival grace, lights hint on/off, debug boxes on/off.
 - Status line: model, TF.js backend, ms per check, last check time, log row count.
 - Load: Safari gives pages no CPU or GPU %, so the page shows stand-ins: detector busy % (share of time spent inside checks over the last 20), main-thread load % (how late a 100 ms timer fires, over ~10 s) and GPU memory used by TF.js.
 - A rolling on-screen view of the last \~50 events; the full history is in the event log.
