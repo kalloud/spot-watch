@@ -118,7 +118,7 @@
 <script>
   // Runs before the libraries and the main script, so load failures and
   // syntax errors still reach the screen (the phone has no console).
-  var SW_BUILD = 'phase3 · 2026-11-02 · 2';
+  var SW_BUILD = 'phase3 · 2026-11-03 · 3';
   var SW_errors = [];
   document.getElementById('build').textContent = SW_BUILD;
 
@@ -1680,7 +1680,7 @@
     location.reload();
   });
 
-  const modelKey = MODELS[load('model', 'yolov8n')] ? load('model', 'yolov8n') : 'yolov8n';
+  const modelKey = MODELS[load('model', 'yolo26n')] ? load('model', 'yolo26n') : 'yolo26n';
   const modelSel = $('model');
   modelSel.value = modelKey;
   modelSel.addEventListener('change', () => {
