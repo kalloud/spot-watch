@@ -1,0 +1,3 @@
+# Core ML models: show them as binary in diffs
+*.mlmodel binary
+*.bin binary
