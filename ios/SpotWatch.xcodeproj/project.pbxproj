@@ -1,0 +1,389 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXContainerItemProxy section */
+		D6BA4BA17BA9A90AA8755027 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = F1C5366ABF125FCE5DBB547A /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7FEEEB53AA7BD19333A98C36;
+			remoteInfo = SpotWatch;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		5B7EE6A95ED39A6732C62E6A /* SpotWatchTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SpotWatchTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		D7583295EA3D8849A0222539 /* SpotWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SpotWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		01D33452F53450A57F27ECCF /* SpotWatchTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = SpotWatchTests;
+			sourceTree = "<group>";
+		};
+		AB76EE8626C6ADA5DC1202EB /* SpotWatch */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = SpotWatch;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		0351BFD0214901DBE6F8ABBB /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C3AF17B5A46A7BBB7D2F3E77 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		568B58A5E6FA440A46B8776E /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				D7583295EA3D8849A0222539 /* SpotWatch.app */,
+				5B7EE6A95ED39A6732C62E6A /* SpotWatchTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		E8C8294F619F458DB1EE1E44 = {
+			isa = PBXGroup;
+			children = (
+				AB76EE8626C6ADA5DC1202EB /* SpotWatch */,
+				01D33452F53450A57F27ECCF /* SpotWatchTests */,
+				568B58A5E6FA440A46B8776E /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		7FEEEB53AA7BD19333A98C36 /* SpotWatch */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B4E95DC77930CE0C45CF6BDD /* Build configuration list for PBXNativeTarget "SpotWatch" */;
+			buildPhases = (
+				6518241251D186C02CD41D42 /* Sources */,
+				C3AF17B5A46A7BBB7D2F3E77 /* Frameworks */,
+				38879B4218CCDDFE7D81CA6D /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				AB76EE8626C6ADA5DC1202EB /* SpotWatch */,
+			);
+			name = SpotWatch;
+			packageProductDependencies = (
+			);
+			productName = SpotWatch;
+			productReference = D7583295EA3D8849A0222539 /* SpotWatch.app */;
+			productType = "com.apple.product-type.application";
+		};
+		F410F53878C36A614496EAE0 /* SpotWatchTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 2BB978CB3EC7046500C91001 /* Build configuration list for PBXNativeTarget "SpotWatchTests" */;
+			buildPhases = (
+				2DBA76D34AAA08E7BB5E4123 /* Sources */,
+				0351BFD0214901DBE6F8ABBB /* Frameworks */,
+				D70E775192DABF0E674B09C2 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				1DAD33D1BEC04D8C3F292C6C /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				01D33452F53450A57F27ECCF /* SpotWatchTests */,
+			);
+			name = SpotWatchTests;
+			packageProductDependencies = (
+			);
+			productName = SpotWatchTests;
+			productReference = 5B7EE6A95ED39A6732C62E6A /* SpotWatchTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		F1C5366ABF125FCE5DBB547A /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2720;
+				LastUpgradeCheck = 2720;
+				TargetAttributes = {
+					7FEEEB53AA7BD19333A98C36 = {
+						CreatedOnToolsVersion = 27.2;
+					};
+					F410F53878C36A614496EAE0 = {
+						CreatedOnToolsVersion = 27.2;
+						TestTargetID = 7FEEEB53AA7BD19333A98C36;
+					};
+				};
+			};
+			buildConfigurationList = AADAECFE10E87A4AD033FF18 /* Build configuration list for PBXProject "SpotWatch" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = E8C8294F619F458DB1EE1E44;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 568B58A5E6FA440A46B8776E /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				7FEEEB53AA7BD19333A98C36 /* SpotWatch */,
+				F410F53878C36A614496EAE0 /* SpotWatchTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		38879B4218CCDDFE7D81CA6D /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D70E775192DABF0E674B09C2 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		2DBA76D34AAA08E7BB5E4123 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		6518241251D186C02CD41D42 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		1DAD33D1BEC04D8C3F292C6C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7FEEEB53AA7BD19333A98C36 /* SpotWatch */;
+			targetProxy = D6BA4BA17BA9A90AA8755027 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		2BB978CB3EC7046500C91002 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 9KKBY2J9SF;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.kalloud.spotwatch.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/SpotWatch.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/SpotWatch";
+			};
+			name = Debug;
+		};
+		2BB978CB3EC7046500C91003 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 9KKBY2J9SF;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.kalloud.spotwatch.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/SpotWatch.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/SpotWatch";
+			};
+			name = Release;
+		};
+		44FD64E7015BE9C612559036 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		8656D12EED7DF66B71B57893 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_VERSION = 5.0;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		8E915B86CFF40B4CF927D464 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				COREML_CODEGEN_LANGUAGE = None;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 9KKBY2J9SF;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Spot Watch";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Spot Watch watches the parking spots through the back camera. Frames stay on this phone.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UIRequiresFullScreen = YES;
+				INFOPLIST_KEY_UIStatusBarHidden = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.kalloud.spotwatch;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		CD344A532C8A3977B61930D3 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				COREML_CODEGEN_LANGUAGE = None;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 9KKBY2J9SF;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Spot Watch";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Spot Watch watches the parking spots through the back camera. Frames stay on this phone.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UIRequiresFullScreen = YES;
+				INFOPLIST_KEY_UIStatusBarHidden = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.kalloud.spotwatch;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		2BB978CB3EC7046500C91001 /* Build configuration list for PBXNativeTarget "SpotWatchTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2BB978CB3EC7046500C91002 /* Debug */,
+				2BB978CB3EC7046500C91003 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AADAECFE10E87A4AD033FF18 /* Build configuration list for PBXProject "SpotWatch" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				44FD64E7015BE9C612559036 /* Debug */,
+				8656D12EED7DF66B71B57893 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B4E95DC77930CE0C45CF6BDD /* Build configuration list for PBXNativeTarget "SpotWatch" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				8E915B86CFF40B4CF927D464 /* Debug */,
+				CD344A532C8A3977B61930D3 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = F1C5366ABF125FCE5DBB547A /* Project object */;
+}

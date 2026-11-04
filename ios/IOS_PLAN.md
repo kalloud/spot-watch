@@ -8,6 +8,7 @@ A native iOS port of the Spot Watch web app, for the same iPhone 6s. Decided Nov
 
 - iPhone 6s, iOS 15.8.5, A9 chip with no Neural Engine (Core ML runs on the GPU and CPU), 2 GB RAM. Deployment target: iOS 15.0.
 - Xcode 27.2 at `/Applications/Xcode.app` (iOS SDK 27.2, lowest deployment target 15.0). `xcode-select` still points to the Command Line Tools, so command-line builds need `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`, or Ahmed runs `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer` himself (it needs his password).
+- **Xcode 27 can't install on the 6s** (found in N0, Nov 3, 2026). It builds for iOS 15, but Apple's support table lists its device support as iOS 17 or later, and the 6s doesn't appear in Xcode 27.2 at all, although macOS is paired with it (usbmuxd sees it and holds its pair record; CoreDevice reports its pairing as "unsupported"). Xcode 26.x is the last to support iOS 15 devices, and Apple lists it for macOS Tahoe 26 only; the Mac runs macOS 27.2. The install route is under "Decisions for Ahmed".
 - Swift (5 language mode), SwiftUI for screens, UIKit where SwiftUI on iOS 15 falls short (the camera preview through `UIViewRepresentable`). No third-party packages.
 - Layout: `ios/SpotWatch.xcodeproj`, app sources in `ios/SpotWatch/`, the pure logic module's tests in `ios/SpotWatchTests/`, Core ML models in `ios/SpotWatch/Models/`.
 
@@ -35,10 +36,14 @@ A native iOS port of the Spot Watch web app, for the same iPhone 6s. Decided Nov
 
 1. Create a Python virtual environment in the session's scratchpad, not in the repo. If the system Python 3.9 gives trouble, use Homebrew's Python 3.12. Install `ultralytics` and `coremltools`.
 2. Download `yolo26n.pt` from the Ultralytics GitHub release `v8.4.0` (`ultralytics/assets`).
-3. `yolo export model=yolo26n.pt format=coreml imgsz=640`, and again with `imgsz=320`. Check each output's input and output spec against the [1, 300, 6] format above.
+3. `yolo export model=yolo26n.pt format=coreml imgsz=640 nms=False`, and again with `imgsz=320`, then both again with `quantize=16` for FP16. `nms=False` matters: in Ultralytics 8.4.202, leaving `nms` unset exports the raw (1, 84, 8400) head, which needs an NMS step. Check each output's input and output spec against the [1, 300, 6] format above.
 4. Add the `.mlpackage` files to `ios/SpotWatch/Models/`, and note the model's AGPL-3.0 license in the app's About screen.
 
 Done when both models load on the 6s and return the bus and the people on Ultralytics' `bus.jpg`.
+
+**Converted Nov 3, 2026 (N0).** Homebrew Python 3.13, ultralytics 8.4.202, coremltools 9.0, torch 2.15.0 (newer than coremltools has tested; it worked). Ultralytics pins numpy ≤ 2.3.5 and swaps it in during the first export, which makes that run fail: run it again. `yolo26n.pt` matches the release's SHA-256 (`9b09cc8b…ad4fef`). Four models in `Models/`: `YOLO26n-640-fp32` (9.5 MB), `YOLO26n-320-fp32` (9.4 MB), `YOLO26n-640-fp16` and `YOLO26n-320-fp16` (4.8 MB each). All are spec version 6 (iOS 15), opset CoreML5, with an RGB image input (scale 1/255) and a float32 [1, 300, 6] output named `var_1439`. Xcode compiles them for deployment target 15.0. FP16 is there because the A9's GPU runs half precision at about twice the FP32 rate. The app has a Precision picker so the 6s can settle it.
+
+On `bus.jpg` (Mac, Core ML on the CPU, frame scaled to fit at the top-left): at 640, bus 0.92 and people 0.92, 0.91, 0.85 and 0.56 (the TF.js export in the web app gave bus 92%, people 86–91%); FP16 within 0.01 of FP32; at 320, bus 0.88 and people 0.85–0.55. **The end-to-end head can return one object twice:** at 320 a person came back at 0.37 and 0.33, and in the app (Simulator, GPU, FP16, 640) the edge person came back at 46% and 25%. So N1 should run the same-class IoU > 0.5 dedupe on every run's boxes, not only across views.
 
 ## Milestones
 
@@ -68,8 +73,8 @@ Each one ends on the 6s with Ahmed's results. Stop and wait after each, the same
 
 ## Decisions for Ahmed (ask in N0)
 
-1. **Signing:** a free Apple ID (the app stops working after 7 days until it's reinstalled from Xcode) or the Apple Developer Program ($99/year, 1-year installs).
-2. **The bundle identifier** (a reverse domain he controls).
+1. **Signing:** a free Apple ID (the app stops working after 7 days until it's reinstalled from Xcode) or the Apple Developer Program ($99/year, 1-year installs). *Decided Nov 3, 2026 (Ahmed): free Apple ID, personal team "Ahmed Belkhir" (`9KKBY2J9SF`), already signed in to Xcode.* Since Xcode 27 can't install on iOS 15, and on a free team only Xcode can register a device, the install route is **Xcode 26.6 next to 27.2** (Ahmed's call, Nov 3, being tried). It's unsupported on macOS 27: its icon shows a "not supported" block, and it opens only by launching `Contents/MacOS/Xcode` inside the app. If it can't see or install on the 6s, the fallback is the Developer Program: register the 6s's UDID on the developer site, build with Xcode 27.2, and install with Apple Configurator 2's `cfgutil`.
+2. **The bundle identifier** (a reverse domain he controls). *Decided Nov 3, 2026 (Ahmed): `io.github.kalloud.spotwatch`, from the GitHub Pages domain kalloud.github.io.*
 3. **640 or 320, and one mosaic run or one run per view:** decided from the N0 and N1 timings.
 
 ## Lessons from the web build
