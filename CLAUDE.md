@@ -2,6 +2,8 @@
 
 PLAN.md is the spec and the source of truth. Read it in full before any work.
 
+The rules below cover the web app (`index.html`). The native iOS app lives in `ios/`, with its own rules in `ios/CLAUDE.md` and its build plan in `ios/IOS_PLAN.md`; for work there, read those and follow them instead. PLAN.md is the product spec for both.
+
 ## Target
 
 - Safari 15 on an iPhone 6s (iOS 15, A9 chip, 2 GB RAM).

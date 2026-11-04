@@ -6,3 +6,9 @@
 *~
 .claude/launch.json
 *.csv
+
+# Xcode (ios/)
+xcuserdata/
+*.xcuserstate
+DerivedData/
+ios/build/
