@@ -2,12 +2,12 @@ import AVFoundation
 import SwiftUI
 import UIKit
 
-let buildLabel = "N1 · 2026-11-04 · 3"
+let buildLabel = "N2 · 2026-11-04 · 1"
 
 /// Everything the screen shows, and the report. Lives on the main thread; the
 /// pipeline's events hop here. Spots, the event log and settings are in
-/// AppModel+Spots.swift, photos in AppModel+Photos.swift, the report in
-/// AppModel+Report.swift.
+/// AppModel+Spots.swift, hunting and alerts in AppModel+Alerts.swift, photos
+/// in AppModel+Photos.swift, the report in AppModel+Report.swift.
 @MainActor
 final class AppModel: ObservableObject {
     enum RowState { case idle, busy, ok, warn, fail }
@@ -52,6 +52,9 @@ final class AppModel: ObservableObject {
         StatusRow(id: "320", label: "YOLO26n 320"),
         StatusRow(id: "check", label: "Checks"),
         StatusRow(id: "spots", label: "Spots"),
+        StatusRow(id: "hunting", label: "Hunting"),
+        StatusRow(id: "alerts", label: "Alerts"),
+        StatusRow(id: "control", label: "Control"),
         StatusRow(id: "events", label: "Events"),
         StatusRow(id: "photos", label: "Photos"),
         StatusRow(id: "device", label: "Device"),
@@ -91,6 +94,15 @@ final class AppModel: ObservableObject {
     @Published var showSettings = false
     @Published var cfg = Config()
 
+    // Hunting and alerts (AppModel+Alerts.swift). The topics never go in the report.
+    @Published var hunting = Hunting()
+    @Published var alertTopic = ""
+    @Published var controlTopic = ""
+    @Published var controlLines: [ControlLine] = []
+    @Published var testType = AlertType.test
+    @Published var testResult = ""
+    @Published var sendingTest = false
+
     @Published var viewMode: ViewMode { didSet { optionsChanged("Views", viewMode.rawValue) } }
     @Published var source: Source { didSet { sourceChanged() } }
     @Published var paused = false { didSet { optionsChanged("Detection", paused ? "paused" : "resumed") } }
@@ -119,6 +131,15 @@ final class AppModel: ObservableObject {
     var lastDropReason = ""
     var focusText = "–"
     var startedPipeline = false
+    var alertTimes = Array(repeating: AlertTimes(), count: AppModel.spotCount)
+    let control = ControlStream()
+    var controlSeen: [String] = []          // recent control message ids, so a replayed one is handled once
+    var controlReconnects = 0
+    var lastKeepalive: Date?
+    var lastHuntTick: Date?
+    var cameraDown = false
+    var appActive = true
+    var activeSince = Date()
 
     init() {
         let d = UserDefaults.standard
@@ -137,7 +158,7 @@ final class AppModel: ObservableObject {
     var frameAspect: CGFloat { frameSize.height > 0 ? frameSize.width / frameSize.height : 4 / 3 }
 
     var options: Pipeline.Options {
-        Pipeline.Options(mode: viewMode, intervalMs: cfg.interval, minScore: cfg.minScore, source: source,
+        Pipeline.Options(mode: viewMode, intervalMs: checkIntervalMs, minScore: cfg.minScore, source: source,
                          paused: paused, shape: currentShape ?? "", spots: activeSpots)
     }
 
@@ -172,6 +193,7 @@ final class AppModel: ObservableObject {
             Task { @MainActor in self?.sampleDevice() }
         }
         pipeline.start(options, compute: compute, precision: precision)
+        startAlerts()
         #if DEBUG
         // `simctl launch --console-pty … -reportAfter 20` prints the report, for Simulator checks.
         let after = UserDefaults.standard.double(forKey: "reportAfter")
@@ -209,12 +231,16 @@ final class AppModel: ObservableObject {
     func scenePhaseChanged(_ phase: ScenePhase) {
         switch phase {
         case .active:
+            appActive = true
+            activeSince = Date()
             set("app", .ok, "Active · screen lock off")
             addLog("app", "Active")
         case .inactive:
+            appActive = false
             set("app", .warn, "Inactive")
             addLog("app", "Inactive")
         case .background:
+            appActive = false
             set("app", .fail, "In the background: iOS stops the camera")
             addLog("app", "In the background")
         @unknown default:
@@ -344,6 +370,7 @@ final class AppModel: ObservableObject {
             cameraRunning = false
             set("camera", .fail, msg)
             fail("camera", msg)
+            cameraStopped(msg)
         case .interrupted(let why):
             set("camera", .fail, "Interrupted: \(why)")
             fail("camera", "Interrupted: \(why)")
@@ -354,6 +381,7 @@ final class AppModel: ObservableObject {
             cameraRunning = false
             set("camera", .fail, "Runtime error: \(msg)")
             fail("camera", "Runtime error: \(msg)")
+            cameraStopped("runtime error: \(msg)")
         case .stopped:
             cameraRunning = false
             addLog("camera", "Stopped")
@@ -406,6 +434,8 @@ final class AppModel: ObservableObject {
         }
         let rate = pipeline.frameRate()
         fps = rate.fps
+        cameraWatch(frameAge: rate.age)
+        if Date().timeIntervalSince(lastHuntTick ?? .distantPast) >= Hunting.tickEvery { huntTick() }
         if source == .camera && cameraRunning {
             if let age = rate.age, age > AppModel.noFramesWarnS {
                 set("camera", .warn, "No frame for \(Int(age)) s")

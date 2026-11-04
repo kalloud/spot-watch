@@ -1,8 +1,8 @@
 import Foundation
 
-// The tuning settings, with the web app's keys, defaults and ranges
-// (PLAN.md's starting parameters). Foundation only. The hunting, alert and
-// eco settings join in N2 and N3.
+// The tuning, hunting and alert settings, with the web app's keys, defaults
+// and ranges (PLAN.md's starting parameters). Foundation only. The ntfy
+// topics are kept apart (AppModel+Alerts.swift), out of the report.
 
 struct Config: Equatable {
     var interval = 1500.0           // ms between check starts; a check never overlaps the previous one
@@ -12,11 +12,22 @@ struct Config: Equatable {
     var confirmN = 3.0
     var hintN = 2.0
     var personMargin = 0.35
+    var huntHours = 3.0
+    var quietStart = 21.0           // decimal hours, e.g. 7.5 = 07:30
+    var quietEnd = 7.0
+    var headsupCooldown = 3.0       // minutes, per spot
+    var freeCooldown = 2.0          // minutes, per spot
+    var arrivalGrace = 2.0          // minutes after a spot becomes occupied with no heads-up
     var changeMin = 10.0
+    var ecoInterval = 10_000.0      // ms between checks when not hunting (and the battery isn't high)
 
     var spotSettings: SpotSettings {
         SpotSettings(occThresh: occThresh, confirmN: Int(confirmN), hintN: Int(hintN), personMargin: personMargin,
                      personMinScore: personMinScore, changeMin: changeMin)
+    }
+
+    var huntSettings: HuntSettings {
+        HuntSettings(huntHours: huntHours, quietStart: quietStart, quietEnd: quietEnd, ecoInterval: ecoInterval)
     }
 }
 
@@ -51,7 +62,14 @@ enum Settings {
         SettingDef(key: "confirmN", label: "confirmN", def: 3, min: 1, max: 20, isInt: true, path: \.confirmN),
         SettingDef(key: "hintN", label: "hintN", def: 2, min: 1, max: 20, isInt: true, path: \.hintN),
         SettingDef(key: "personMargin", label: "Person margin", def: 0.35, min: 0, max: 2, isInt: false, path: \.personMargin),
-        SettingDef(key: "changeMin", label: "Departure change min", def: 10, min: 0, max: 100, isInt: false, path: \.changeMin)
+        SettingDef(key: "huntHours", label: "Hunt timeout (h)", def: 3, min: 0.05, max: 12, isInt: false, path: \.huntHours),
+        SettingDef(key: "quietStart", label: "Quiet from (h)", def: 21, min: 0, max: 23.99, isInt: false, path: \.quietStart),
+        SettingDef(key: "quietEnd", label: "Quiet until (h)", def: 7, min: 0, max: 23.99, isInt: false, path: \.quietEnd),
+        SettingDef(key: "headsupCooldown", label: "Heads-up cooldown (min)", def: 3, min: 0, max: 60, isInt: false, path: \.headsupCooldown),
+        SettingDef(key: "freeCooldown", label: "FREE cooldown (min)", def: 2, min: 0, max: 60, isInt: false, path: \.freeCooldown),
+        SettingDef(key: "arrivalGrace", label: "Arrival grace (min)", def: 2, min: 0, max: 30, isInt: false, path: \.arrivalGrace),
+        SettingDef(key: "changeMin", label: "Departure change min", def: 10, min: 0, max: 100, isInt: false, path: \.changeMin),
+        SettingDef(key: "ecoInterval", label: "Eco interval (ms)", def: 10000, min: 1500, max: 60000, isInt: true, path: \.ecoInterval)
     ]
 
     /// "interval 1500, minScore 0.2, …" for the report.

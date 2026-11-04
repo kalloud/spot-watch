@@ -65,6 +65,14 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         }
     }
 
+    /// Stops and starts the session again, for the watchdog.
+    func restart() {
+        sessionQueue.async {
+            if self.session.isRunning { self.session.stopRunning() }
+            self.configureAndRun()
+        }
+    }
+
     func setOrientation(_ o: AVCaptureVideoOrientation) {
         sessionQueue.async {
             self.orientation = o

@@ -144,8 +144,8 @@ extension AppModel {
         switch e {
         case .changed(let state, let coverage, let change):
             logEvent(i, state.rawValue, coverage: coverage, detail: change.map { String(format: "change %.1f", $0) } ?? "")
-        case .freed:
-            break                                   // the FREE alert comes with hunting, in N2
+        case .freed(let coverage, let occupiedSince):
+            spotFreed(i, coverage: coverage, occupiedSince: occupiedSince)
         case .vacantRejected(let coverage, let change, let count, let logRow):
             let detail = String(format: "change %.1f < %@", change, SettingDef.text(cfg.changeMin))
             if logRow {
@@ -153,8 +153,8 @@ extension AppModel {
             } else {
                 addLog("spots", "Spot \(i + 1) vacant rejected: \(detail) (\(count))")
             }
-        case .personNear(let coverage, let score, _):
-            logEvent(i, "person_near", coverage: coverage, detail: "person \(Int((score * 100).rounded()))%")
+        case .personNear(let coverage, let score, let occupiedSince):
+            personNear(i, coverage: coverage, score: score, occupiedSince: occupiedSince)
         }
     }
 
@@ -169,11 +169,11 @@ extension AppModel {
         renderEventsStatus()
     }
 
-    /// Appends a row: spot is 0-based (nil for whole-app rows). Hunting comes in N2.
+    /// Appends a row: spot is 0-based (nil for whole-app rows).
     func logEvent(_ spot: Int?, _ event: String, coverage: Double?, detail: String) {
         guard let s = store else { return }
         let row = EventRow(time: Date(), spot: spot.map { $0 + 1 }, event: event,
-                           coverage: coverage.map { Int(($0 * 100).rounded()) }, hunting: false, detail: detail)
+                           coverage: coverage.map { Int(($0 * 100).rounded()) }, hunting: hunting.state.on, detail: detail)
         s.append(row)
         if let f = s.failure { fail("events", f) }
         checkRows.append(row)
@@ -290,6 +290,7 @@ extension AppModel {
             }
         }
         cfg = c
+        huntSettingsChanged()
         pushOptions()
         return bad
     }

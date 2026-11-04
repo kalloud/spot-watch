@@ -274,6 +274,27 @@ private struct Panel: View {
                     }
                 }
             }
+            PanelSection(title: "Hunting") {
+                Button(model.hunting.state.on ? "Hunt off" : "Hunt on") { model.toggleHunt() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(model.hunting.state.on ? .red : .green)
+                HStack {
+                    Picker("Preview", selection: $model.testType) {
+                        ForEach(AlertType.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.menu)
+                    Button("Send test") { Task { await model.sendTest() } }
+                        .buttonStyle(.bordered)
+                        .disabled(model.sendingTest)
+                }
+                if !model.testResult.isEmpty { Text(model.testResult).foregroundColor(.gray) }
+                Text("Control topic: " + model.controlInfo).foregroundColor(.gray)
+                ForEach(Array(model.controlLines.enumerated()), id: \.offset) { _, m in
+                    Text(Format.clock(m.at) + (m.lagS.map { " · ~\($0) s after send" } ?? "") + " · " + m.text)
+                        .font(.system(size: 10, design: .monospaced))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
             PanelSection(title: "Status") {
                 ForEach(model.rows) { r in
                     HStack(alignment: .firstTextBaseline, spacing: 6) {

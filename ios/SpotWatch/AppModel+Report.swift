@@ -13,8 +13,15 @@ extension AppModel {
             "\(side) run: last \(Format.ms(t?.infer.last)) · \(infer)",
             "CPU \(cpuText)",
             "Thermal \(thermal) · battery \(battery)",
-            "Memory \(memoryText)"
+            "Memory \(memoryText)",
+            huntLine
         ]
+    }
+
+    /// "Hunting on until 13:00 · full speed", or "Hunting off · eco, every 10 s".
+    var huntLine: String {
+        guard hunting.state.on else { return "Hunting off · \(hunting.modeText)" }
+        return "Hunting on until \(hunting.hm(hunting.end(now: Date()).at)) · \(hunting.modeText)"
     }
 
     var cpuText: String {
@@ -94,6 +101,11 @@ extension AppModel {
         }
         lines.append("  Views: " + (views.isEmpty ? "full frame" : views.map(\.text).joined(separator: " | ")))
         lines.append("Settings: " + Settings.text(cfg))
+        lines.append("Topics: alert \(alertTopic.isEmpty ? "not set" : "set"), control \(controlTopic.isEmpty ? "not set" : "set") (names left out)")
+        lines.append("Control topic: \(controlInfo)")
+        for m in controlLines {
+            lines.append("  \(Format.clock(m.at))" + (m.lagS.map { " · ~\($0) s after send" } ?? "") + " · " + String(m.text.prefix(80)))
+        }
         lines.append("")
         lines.append("Last detections\(lastCheckAt.map { " (\(Format.clock($0)))" } ?? ""):")
         if detections.isEmpty { lines.append("  none above \(Int((cfg.minScore * 100).rounded()))%") }
