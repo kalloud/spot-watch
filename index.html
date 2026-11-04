@@ -118,7 +118,7 @@
 <script>
   // Runs before the libraries and the main script, so load failures and
   // syntax errors still reach the screen (the phone has no console).
-  var SW_BUILD = 'phase3 · 2026-11-03 · 3';
+  var SW_BUILD = 'phase3 · 2026-11-03 · 4';
   var SW_errors = [];
   document.getElementById('build').textContent = SW_BUILD;
 
@@ -334,7 +334,9 @@
     { key: 'quietEnd', label: 'Quiet until (h)', def: 7, min: 0, max: 23.99 },
     { key: 'headsupCooldown', label: 'Heads-up cooldown (min)', def: 3, min: 0, max: 60 },
     { key: 'freeCooldown', label: 'FREE cooldown (min)', def: 2, min: 0, max: 60 },
-    { key: 'arrivalGrace', label: 'Arrival grace (min)', def: 2, min: 0, max: 30 }
+    { key: 'arrivalGrace', label: 'Arrival grace (min)', def: 2, min: 0, max: 30 },
+    { key: 'changeMin', label: 'Departure change min', def: 10, min: 0, max: 100 },
+    { key: 'ecoInterval', label: 'Eco interval (ms)', def: 10000, min: 1500, max: 60000, int: true }
   ];
   // Alert types from PLAN.md; `sample` is the title a test of that type uses.
   const ALERT_TYPES = {
@@ -343,13 +345,17 @@
     headsup: { label: 'Heads up', priority: 4, tags: 'eyes', sample: 'Heads up: spot 1' },
     camera: { label: 'Camera stopped', priority: 3, tags: 'warning', sample: 'Camera stopped' },
     hunt: { label: 'Hunting on/off', priority: 2, tags: 'white_check_mark', sample: 'Hunting on until 22:00' },
-    export: { label: 'Export reminder', priority: 1, tags: 'floppy_disk', sample: 'Export the Spot Watch log' }
+    export: { label: 'Export reminder', priority: 1, tags: 'floppy_disk', sample: 'Export the Spot Watch log' },
+    power: { label: 'Power mode', priority: 1, tags: 'battery', sample: 'Battery low: eco when not hunting' }
   };
   const ALERT_RETRY_MS = 10000;   // a failed alert is tried once more after this
   const HUNT_TICK_MS = 15000;     // how often the timeout, quiet hours and export reminder are checked
   const CAMERA_DEAD_TICKS = 5;    // loop ticks in a row with no usable frame before "Camera stopped"
   const RECONNECT_MS = 5000;      // wait before reconnecting to the control topic
   const WEEK_MS = 7 * 24 * 3600000;
+  const LATE_MS = 120000;         // a hunt end found this long after it happened is reported as late
+  const THUMB_W = 32;             // width of a spot's snapshot for the departure check
+  const SNAPSHOT_EVERY = 10;      // occupied readings between snapshot refreshes, so slow light changes follow
   const LOG_MAX = 50;
   const MESSAGES_MAX = 20;
   const PUBLISH_TIMEOUT_MS = 15000;
@@ -382,6 +388,8 @@
   const lctx = luma.getContext('2d');
   const stack = document.createElement('canvas');   // where Night boost grabs its frames, off screen
   const sctx = stack.getContext('2d');
+  const thumb = document.createElement('canvas');   // a spot's small snapshot, for the departure check
+  const thctx = thumb.getContext('2d');
   const tileCanvas = document.createElement('canvas');  // one view at a time, for COCO-SSD
   const tctx = tileCanvas.getContext('2d');
 
@@ -803,9 +811,22 @@
       const h = JSON.parse(load('hunt', 'null'));
       if (h && typeof h.on === 'boolean') return h;
     } catch (e) { /* unreadable: start with hunting off */ }
-    return { on: false, until: null, lastCommand: null, lastCommandAt: null };
+    return { on: false, since: null, until: null, lastCommand: null, lastCommandAt: null };
   }
   function saveHunt() { save('hunt', JSON.stringify(hunt)); }
+
+  // Battery level as last reported by the 6s's Shortcuts automations
+  // ("power low" / "power high"); Safari can't read it itself.
+  let power = load('power', 'unknown');
+  if (['low', 'high', 'unknown'].indexOf(power) === -1) power = 'unknown';
+
+  // Checks run at full speed while hunting, or while the battery is high (to
+  // use power up); otherwise every ecoInterval, to cut heat and power.
+  function fullSpeed() { return hunt.on || power === 'high'; }
+  function checkInterval() { return fullSpeed() ? cfg.interval : cfg.ecoInterval; }
+  function modeText() {
+    return fullSpeed() ? 'full speed' + (hunt.on ? '' : ' (battery high)') : 'eco, every ' + cfg.ecoInterval / 1000 + ' s';
+  }
 
   function hm(ms) {
     const d = new Date(ms);
@@ -845,8 +866,10 @@
     }
     const extended = hunt.on;
     hunt.on = true;
+    if (!extended) hunt.since = at;
     hunt.until = until;
     saveHunt();
+    kickLoop();
     const end = huntEnd();
     logEvent(null, 'hunt_on', null, (extended ? 'extended' : 'started') + ', ends ' + hm(end.at) + ' (' + end.why + ')' +
       (late ? ', sent ' + clock(new Date(at)) : ''));
@@ -855,29 +878,59 @@
       : 'The ' + cfg.huntHours + ' h safety timeout ends it at ' + hm(end.at) + '.');
   }
 
-  function endHunt(why) {
+  // `at` is when the hunt actually ended. If the page wasn't running then (a
+  // reload, a frozen tab), the reply says when it ended rather than implying now.
+  function endHunt(why, at) {
     if (!hunt.on) return;
     hunt.on = false;
     hunt.until = null;
     saveHunt();
-    logEvent(null, 'hunt_off', null, why);
-    sendAlert('hunt', 'Hunting off (' + why + ')', 'Spot Watch stopped hunting at ' + hm(Date.now()) + '.');
+    const late = Date.now() - at > LATE_MS;
+    logEvent(null, 'hunt_off', null, why + (late ? ', ended ' + stamp(new Date(at)) : ''));
+    if (late) {
+      sendAlert('hunt', 'Hunting ended at ' + whenText(at) + ' (' + why + ')',
+        'The page wasn\'t running then, so this is reported late, at ' + hm(Date.now()) + '.');
+    } else {
+      sendAlert('hunt', 'Hunting off (' + why + ')', 'Spot Watch stopped hunting at ' + hm(Date.now()) + '.');
+    }
+  }
+
+  // HH:MM today, or MM-DD HH:MM for an earlier day.
+  function whenText(ms) {
+    const d = new Date(ms);
+    return d.toDateString() === new Date().toDateString() ? hm(ms) : pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + ' ' + hm(ms);
+  }
+
+  function setPower(level, late) {
+    power = level;
+    save('power', level);
+    logEvent(null, 'power_' + level, null, modeText() + (late ? ', sent late' : ''));
+    if (!late) {
+      sendAlert('power', 'Battery ' + level + ': ' + (fullSpeed() ? 'full speed' : 'eco when not hunting'),
+        level === 'high' ? 'Checks run at full speed to use power.' : 'Checks slow to every ' + cfg.ecoInterval / 1000 + ' s when not hunting.');
+    }
+    kickLoop();
   }
 
   // `at` is when the command was sent, so a command replayed after a
   // reconnect is judged by its own time, not by when it arrived.
   function handleCommand(text, at) {
     const cmd = String(text).trim().toLowerCase().replace(/\s+/g, ' ');
+    const late = Date.now() - at > 60000;
+    if (cmd === 'power low' || cmd === 'power high') {
+      setPower(cmd === 'power low' ? 'low' : 'high', late);
+      renderHunt();
+      return;
+    }
     if (cmd !== 'hunt on' && cmd !== 'hunt off') {
       log('control', 'Not a command, ignored: "' + String(text).slice(0, 40) + '"');
       return;
     }
-    const late = Date.now() - at > 60000;
     hunt.lastCommand = cmd;
     hunt.lastCommandAt = at;
     saveHunt();
     if (cmd === 'hunt off') {
-      if (hunt.on) endHunt('manual');
+      if (hunt.on) endHunt('manual', at);
       else if (!late) sendAlert('hunt', 'Hunting was already off', 'Nothing to stop.');
     } else if (inQuietHours(at)) {
       log('hunt', '"hunt on" refused: quiet hours');
@@ -893,11 +946,12 @@
 
   function renderHunt() {
     const last = hunt.lastCommand ? ' · last command "' + hunt.lastCommand + '" at ' + stamp(new Date(hunt.lastCommandAt)) : '';
+    const mode = ' · checks: ' + modeText() + (power !== 'unknown' ? ' · battery ' + power : '');
     if (hunt.on) {
       const end = huntEnd();
-      setStatus('hunting', 'ok', 'On until ' + hm(end.at) + ' (' + end.why + ')' + last);
+      setStatus('hunting', 'ok', 'On until ' + hm(end.at) + ' (' + end.why + ')' + mode + last);
     } else {
-      setStatus('hunting', 'idle', 'Off' + last);
+      setStatus('hunting', 'idle', 'Off' + mode + last);
     }
     $('huntToggle').textContent = hunt.on ? 'Hunt off' : 'Hunt on';
   }
@@ -916,10 +970,17 @@
       (lastExport ? stamp(new Date(lastExport)) : 'never') + '. Open the page and tap Export CSV.');
   }
 
+  // Ends the hunt at whichever came first: the timeout, or the first quiet-hours
+  // start after it began, using the real time even if the page was down then.
+  // A quiet-hours window edited to cover now ends it straight away.
   function huntTick() {
     const now = Date.now();
-    if (hunt.on && now >= hunt.until) endHunt('timeout');
-    else if (hunt.on && inQuietHours(now)) endHunt('quiet hours');
+    if (hunt.on) {
+      const quietAt = cfg.quietStart === cfg.quietEnd ? Infinity : nextAt(hunt.since || now, cfg.quietStart);
+      if (hunt.until <= now && hunt.until <= quietAt) endHunt('timeout', hunt.until);
+      else if (quietAt <= now) endHunt('quiet hours', quietAt);
+      else if (inQuietHours(now)) endHunt('quiet hours', now);
+    }
     exportReminder(now);
     renderHunt();
   }
@@ -1219,7 +1280,8 @@
   function freshTrack() {
     return {
       state: 'unknown', since: null, occRun: 0, vacRun: 0,
-      coverage: null, person: false, personRun: 0, clearRun: 0, personVisit: false
+      coverage: null, person: false, personRun: 0, clearRun: 0, personVisit: false,
+      snap: null, snapAge: 0, rejects: 0
     };
   }
   function freshTracks() { return spots.map(() => freshTrack()); }
@@ -1344,14 +1406,39 @@
     t.coverage = reading.coverage;
     t.person = reading.person;
     const threshold = t.state === 'occupied' ? cfg.occThresh * HOLD_FACTOR : cfg.occThresh;
-    if (reading.coverage >= threshold) { t.occRun++; t.vacRun = 0; } else { t.vacRun++; t.occRun = 0; }
-    const next = t.occRun >= cfg.confirmN ? 'occupied' : t.vacRun >= cfg.confirmN ? 'vacant' : null;
+    const occupiedReading = reading.coverage >= threshold;
+    if (occupiedReading) { t.occRun++; t.vacRun = 0; } else { t.vacRun++; t.occRun = 0; }
+    let next = t.occRun >= cfg.confirmN ? 'occupied' : t.vacRun >= cfg.confirmN ? 'vacant' : null;
+
+    // Departure check: a car that drove away changes the spot's picture; a car
+    // the detector merely lost doesn't. If the spot still looks like its
+    // snapshot, it stays occupied.
+    let change = null;
+    if (next === 'vacant' && t.state === 'occupied' && t.snap) {
+      change = thumbDiff(t.snap, spotThumb(spots[i]));
+      if (change !== null && change < cfg.changeMin) {
+        next = null;
+        t.vacRun = 0;
+        t.rejects++;
+        const detail = 'change ' + change.toFixed(1) + ' < ' + cfg.changeMin;
+        if (t.rejects % 20 === 1) logEvent(i, 'vacant_rejected', reading.coverage, detail + (t.rejects > 1 ? ', ' + t.rejects + ' so far' : ''));
+        else log('spots', 'Spot ' + (i + 1) + ' vacant rejected: ' + detail + ' (' + t.rejects + ')');
+      }
+    }
+
     if (next && next !== t.state) {
       const prev = t.state, prevSince = t.since;
       t.state = next;
       t.since = new Date();
-      logEvent(i, next, reading.coverage);
+      logEvent(i, next, reading.coverage, change !== null ? 'change ' + change.toFixed(1) : '');
       if (prev === 'occupied' && next === 'vacant') onSpotFreed(i, reading.coverage, prevSince);
+    }
+
+    // The snapshot is taken while a car is in the spot, and refreshed every
+    // SNAPSHOT_EVERY occupied readings so slow light changes follow along.
+    if (t.state === 'occupied' && occupiedReading && (!t.snap || ++t.snapAge >= SNAPSHOT_EVERY)) {
+      t.snap = spotThumb(spots[i]);
+      t.snapAge = 0;
     }
     if (reading.person) { t.personRun++; t.clearRun = 0; } else { t.clearRun++; t.personRun = 0; }
     if (!t.personVisit && t.state === 'occupied' && t.personRun >= cfg.hintN) {
@@ -1360,6 +1447,35 @@
     } else if (t.personVisit && t.clearRun >= cfg.hintN) {
       t.personVisit = false;
     }
+  }
+
+  // A spot's picture as a THUMB_W-wide grey thumbnail with its mean brightness
+  // removed, so a change in overall light (exposure, dusk) doesn't count as change.
+  function spotThumb(s) {
+    const vw = video.videoWidth, vh = video.videoHeight;
+    const sw = Math.max(1, Math.round(s.w * vw)), sh = Math.max(1, Math.round(s.h * vh));
+    const w = THUMB_W, h = Math.max(4, Math.min(48, Math.round(THUMB_W * sh / sw)));
+    if (thumb.width !== w) thumb.width = w;
+    if (thumb.height !== h) thumb.height = h;
+    thctx.drawImage(video, Math.round(s.x * vw), Math.round(s.y * vh), sw, sh, 0, 0, w, h);
+    const d = thctx.getImageData(0, 0, w, h).data;
+    const g = new Float32Array(w * h);
+    let mean = 0;
+    for (let p = 0, j = 0; p < g.length; p++, j += 4) {
+      g[p] = 0.299 * d[j] + 0.587 * d[j + 1] + 0.114 * d[j + 2];
+      mean += g[p];
+    }
+    mean /= g.length;
+    for (let p = 0; p < g.length; p++) g[p] -= mean;
+    return g;
+  }
+
+  // Mean absolute difference between two thumbnails (0–255), or null if they don't match in size.
+  function thumbDiff(a, b) {
+    if (!a || !b || a.length !== b.length) return null;
+    let sum = 0;
+    for (let p = 0; p < a.length; p++) sum += Math.abs(a[p] - b[p]);
+    return sum / a.length;
   }
 
   // FREE fires only on occupied → vacant (never from unknown), while hunting,
@@ -1980,7 +2096,11 @@
     runCheck();
   }
 
+  let loopTimer = 0;
+  let checking = false;
+
   async function runCheck() {
+    checking = true;
     const started = performance.now();
     cameraWatch();
     if (!paused && cameraLive()) {
@@ -1993,7 +2113,15 @@
     } else {
       prevCheckStart = null;
     }
-    setTimeout(runCheck, Math.max(0, cfg.interval - (performance.now() - started)));
+    checking = false;
+    loopTimer = setTimeout(runCheck, Math.max(0, checkInterval() - (performance.now() - started)));
+  }
+
+  // Runs the next check now instead of waiting out the eco interval, e.g. on "hunt on".
+  function kickLoop() {
+    if (!loopStarted || checking) return;
+    clearTimeout(loopTimer);
+    loopTimer = setTimeout(runCheck, 0);
   }
 
   // Load stand-ins: Safari gives pages no CPU or GPU %.
@@ -2066,7 +2194,7 @@
         stats.max = Math.max(stats.max, ms);
       }
       setStatus('check', stats.errors ? 'warn' : 'ok',
-        stats.ok + ' ok · ' + stats.errors + ' failed · avg ' + fmtMs(stats.n ? stats.sum / stats.n : stats.firstMs));
+        stats.ok + ' ok · ' + stats.errors + ' failed · avg ' + fmtMs(stats.n ? stats.sum / stats.n : stats.firstMs) + ' · ' + modeText());
 
       const summary = summarize(lastDets);
       if (summary !== lastSummary) {
@@ -2103,6 +2231,7 @@
     const mem = backendInfo ? tf.memory() : null;
     const busy = detectorBusy(), main = mainThreadLoad();
     return [
+      ['Mode', modeText() + (power !== 'unknown' ? ' · battery ' + power : '')],
       ['Model', MODELS[modelKey]],
       ['Backend', backendInfo || '–'],
       ['Camera', video.videoWidth ? video.videoWidth + '×' + video.videoHeight : '–'],
