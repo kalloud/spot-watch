@@ -51,6 +51,7 @@ final class Pipeline {
         let views: [FracRect]
         let detections: [Detection]         // frame pixels, de-duplicated
         let thumbs: [Int: [Float]]          // each active spot's thumbnail from this frame
+        let frame: CIImage                  // for a photo; holds the camera buffer until the result is dropped
         let runs: [Run]
         let prepMs: Double                  // cutting views into inputs, and the thumbnails
         let totalMs: Double
@@ -225,7 +226,7 @@ final class Pipeline {
             prepMs += (CFAbsoluteTimeGetCurrent() - t1) * 1000
             onEvent?(.check(CheckResult(started: started, source: source, shape: o.shape, spots: o.spots,
                                         frameWidth: fw, frameHeight: fh, views: views,
-                                        detections: Geometry.dedupe(found), thumbs: thumbs, runs: runs, prepMs: prepMs,
+                                        detections: Geometry.dedupe(found), thumbs: thumbs, frame: frame, runs: runs, prepMs: prepMs,
                                         totalMs: (CFAbsoluteTimeGetCurrent() - t0) * 1000)))
         } catch {
             onEvent?(.checkFailed("YOLO26n \(model.side): \(error.localizedDescription)"))

@@ -2,11 +2,12 @@ import AVFoundation
 import SwiftUI
 import UIKit
 
-let buildLabel = "N1 · 2026-11-04 · 1"
+let buildLabel = "N1 · 2026-11-04 · 2"
 
 /// Everything the screen shows, and the report. Lives on the main thread; the
 /// pipeline's events hop here. Spots, the event log and settings are in
-/// AppModel+Spots.swift, the report in AppModel+Report.swift.
+/// AppModel+Spots.swift, photos in AppModel+Photos.swift, the report in
+/// AppModel+Report.swift.
 @MainActor
 final class AppModel: ObservableObject {
     enum RowState { case idle, busy, ok, warn, fail }
@@ -52,6 +53,7 @@ final class AppModel: ObservableObject {
         StatusRow(id: "check", label: "Checks"),
         StatusRow(id: "spots", label: "Spots"),
         StatusRow(id: "events", label: "Events"),
+        StatusRow(id: "photos", label: "Photos"),
         StatusRow(id: "device", label: "Device"),
         StatusRow(id: "app", label: "App")
     ]
@@ -78,6 +80,7 @@ final class AppModel: ObservableObject {
     @Published var orientation: AVCaptureVideoOrientation?
     @Published var copyResult = ""
     @Published var exportResult = ""
+    @Published var exporting = false
 
     // Spots and the event log (AppModel+Spots.swift).
     @Published var spots: [Spot?] = Array(repeating: nil, count: AppModel.spotCount)
@@ -101,6 +104,10 @@ final class AppModel: ObservableObject {
     let pipeline = Pipeline()
     let started = Date()
     var store: EventStore?
+    var photos: PhotoStore?
+    var lastPhotoAt: Date?
+    /// Rows logged by the check being handled, for its photo.
+    var checkRows: [EventRow] = []
     /// The frame's pixel size for the current source, once known.
     var frameDims: CGSize?
     var lastShape: String?
@@ -152,6 +159,7 @@ final class AppModel: ObservableObject {
         loadSettings()
         loadSpots()
         openEventLog()
+        openPhotos()
         lastShape = currentShape
         renderSpotsStatus()
         pipeline.onEvent = { [weak self] e in
@@ -171,6 +179,14 @@ final class AppModel: ObservableObject {
             Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: UInt64(after * 1_000_000_000))
                 if let self = self { print(self.buildReport()) }
+            }
+        }
+        // `… -exportAfter 30` zips the export and prints its files, without the share sheet.
+        let exportAfter = UserDefaults.standard.double(forKey: "exportAfter")
+        if exportAfter > 0 {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(exportAfter * 1_000_000_000))
+                self?.prepareExport { files, what in print("EXPORT \(what): " + files.map(\.path).joined(separator: " ")) }
             }
         }
         #endif
@@ -309,7 +325,9 @@ final class AppModel: ObservableObject {
         lastCheckAt = r.started
         let runs = r.runs.count == 1 ? "1 run" : "\(r.runs.count) runs"
         set("check", .ok, "\(Format.clock(r.started)) · \(Format.ms(r.totalMs)) · \(viewMode.rawValue), \(runs) · \(YOLO26.summarize(r.detections))")
+        checkRows = []
         updateSpots(r)
+        photoIfDue(r)
     }
 
     private func handleCamera(_ e: Camera.Event) {

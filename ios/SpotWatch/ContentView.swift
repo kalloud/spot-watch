@@ -285,7 +285,7 @@ private struct Panel: View {
             }
             PanelSection(title: "Events") {
                 HStack {
-                    Button("Export CSV") { model.exportCSV() }.buttonStyle(.bordered)
+                    Button("Export CSV + photos") { model.exportLog() }.buttonStyle(.bordered).disabled(model.exporting)
                     if !model.exportResult.isEmpty { Text(model.exportResult).foregroundColor(.gray) }
                 }
                 if model.recentEvents.isEmpty { Text("No events yet").foregroundColor(.gray) }

@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-// Spots, their states, the event log, settings and CSV export: the web app's
+// Spots, their states, the event log, settings and the export: the web app's
 // spot code wired to the pure logic in Logic/.
 extension AppModel {
     // MARK: - Frame shape
@@ -176,6 +176,7 @@ extension AppModel {
                            coverage: coverage.map { Int(($0 * 100).rounded()) }, hunting: false, detail: detail)
         s.append(row)
         if let f = s.failure { fail("events", f) }
+        checkRows.append(row)
         recentEvents.append(row)
         if recentEvents.count > AppModel.eventsShown { recentEvents.removeFirst(recentEvents.count - AppModel.eventsShown) }
         addLog("event", EventFormat.text(row))
@@ -188,19 +189,48 @@ extension AppModel {
         set("events", s.failure != nil ? .fail : s.rows.isEmpty ? .idle : .ok, s.failure.map { detail + " · " + $0 } ?? detail)
     }
 
-    func exportCSV() {
-        guard let s = store else { return }
+    /// The CSV and a zip of the photos, through the share sheet.
+    func exportLog() {
+        prepareExport { [weak self] files, what in self?.share(files, what: what) }
+    }
+
+    /// Writes the CSV and zips the photos (off the main thread), then hands
+    /// over the files and a description such as "24 rows and 37 photos". A
+    /// failed zip still hands over the CSV.
+    func prepareExport(_ done: @escaping ([URL], String) -> Void) {
+        guard let s = store, !exporting else { return }
+        let csv: URL
         do {
-            let url = try s.exportCSV()
-            share(url, rows: s.rows.count)
+            csv = try s.exportCSV()
         } catch {
             exportResult = "Export failed: \(error.localizedDescription)"
             fail("events", exportResult)
+            return
+        }
+        let rows = "\(s.rows.count) rows"
+        guard let p = photos else { return done([csv], rows) }
+        exporting = true
+        exportResult = "Zipping the photos…"
+        p.zip(named: PhotoPlan.zipName(Date())) { result in
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                self.exporting = false
+                self.exportResult = ""
+                switch result {
+                case .success(let zip?):
+                    done([csv, zip.url], "\(rows) and \(zip.count) photos")
+                case .success(nil):
+                    done([csv], rows)
+                case .failure(let error):
+                    self.fail("photos", "Could not zip the photos (\(error.localizedDescription)); sharing the CSV alone")
+                    done([csv], rows)
+                }
+            }
         }
     }
 
-    /// The share sheet (AirDrop, Files…) for the CSV.
-    private func share(_ url: URL, rows: Int) {
+    /// The share sheet (AirDrop, Files…) for the exported files.
+    private func share(_ files: [URL], what: String) {
         let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
         guard var top = scene?.windows.first(where: { $0.isKeyWindow })?.rootViewController else {
             exportResult = "Could not open the share sheet."
@@ -208,7 +238,8 @@ extension AppModel {
             return
         }
         while let next = top.presentedViewController { top = next }
-        let sheet = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        let name = files[0].lastPathComponent
+        let sheet = UIActivityViewController(activityItems: files, applicationActivities: nil)
         sheet.completionWithItemsHandler = { [weak self] activity, completed, _, error in
             Task { @MainActor in
                 guard let self = self else { return }
@@ -216,7 +247,7 @@ extension AppModel {
                     self.exportResult = "Export failed: \(error.localizedDescription)"
                     self.fail("events", self.exportResult)
                 } else if completed {
-                    self.exportResult = "\(Format.clock()): shared \(url.lastPathComponent) (\(rows) rows)" +
+                    self.exportResult = "\(Format.clock()): shared \(name) (\(what))" +
                         (activity.map { " via \($0.rawValue.components(separatedBy: ".").last ?? $0.rawValue)" } ?? "")
                     UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "sw.lastExport")
                     self.addLog("events", self.exportResult)
@@ -226,7 +257,7 @@ extension AppModel {
             }
         }
         top.present(sheet, animated: true)
-        exportResult = "Sharing \(url.lastPathComponent) (\(rows) rows)…"
+        exportResult = "Sharing \(name) (\(what))…"
     }
 
     // MARK: - Settings
