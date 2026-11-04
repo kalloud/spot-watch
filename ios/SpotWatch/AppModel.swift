@@ -2,7 +2,7 @@ import AVFoundation
 import SwiftUI
 import UIKit
 
-let buildLabel = "N2 · 2026-11-04 · 1"
+let buildLabel = "N2 · 2026-11-04 · 2"
 
 /// Everything the screen shows, and the report. Lives on the main thread; the
 /// pipeline's events hop here. Spots, the event log and settings are in
@@ -203,6 +203,8 @@ final class AppModel: ObservableObject {
                 if let self = self { print(self.buildReport()) }
             }
         }
+        // `… -showSettings YES` opens Settings, for a Simulator screenshot.
+        if UserDefaults.standard.bool(forKey: "showSettings") { showSettings = true }
         // `… -exportAfter 30` zips the export and prints its files, without the share sheet.
         let exportAfter = UserDefaults.standard.double(forKey: "exportAfter")
         if exportAfter > 0 {

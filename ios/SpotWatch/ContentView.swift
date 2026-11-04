@@ -251,10 +251,12 @@ private struct Panel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Spot Watch").font(.system(size: 15, weight: .bold))
+                Text("Spot Watch").font(.system(size: 15, weight: .bold)).fixedSize()
                 Spacer()
-                Text(buildLabel).foregroundColor(.gray)
+                Button { model.showSettings = true } label: { Label("Settings", systemImage: "gearshape").fixedSize() }
+                    .buttonStyle(.bordered)
             }
+            Text(buildLabel).foregroundColor(.gray)
             if !model.errors.isEmpty { ErrorBox(model: model) }
             Controls(model: model)
             PanelSection(title: "Spots") {
@@ -275,6 +277,12 @@ private struct Panel: View {
                 }
             }
             PanelSection(title: "Hunting") {
+                if model.alertTopic.isEmpty || model.controlTopic.isEmpty {
+                    HStack {
+                        Text("Add your two ntfy topics first.").foregroundColor(.orange)
+                        Button("Open Settings") { model.showSettings = true }.buttonStyle(.bordered)
+                    }
+                }
                 Button(model.hunting.state.on ? "Hunt off" : "Hunt on") { model.toggleHunt() }
                     .buttonStyle(.borderedProminent)
                     .tint(model.hunting.state.on ? .red : .green)
@@ -374,8 +382,6 @@ private struct Controls: View {
             Toggle("Detection boxes", isOn: $model.showBoxes)
             HStack {
                 Button(model.paused ? "Resume" : "Pause") { model.paused.toggle() }
-                    .buttonStyle(.bordered)
-                Button("Settings") { model.showSettings = true }
                     .buttonStyle(.bordered)
                 Button("Copy report") { model.copyReport() }
                     .buttonStyle(.borderedProminent)
