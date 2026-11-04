@@ -57,10 +57,10 @@ final class YOLOModel {
         specText = "input \(input.name) \(side)×\(side) · output \(output.name) [1, 300, 6] \(YOLOModel.typeText(output.multiArrayConstraint?.dataType))"
     }
 
-    /// Scales `frame` into the model input (top-left, black padding) and runs the model.
-    func run(_ frame: CIImage, context: CIContext) throws -> Run {
+    /// Runs the model on `square`, a side×side image at the origin (see `Composer`).
+    func run(_ square: CIImage, context: CIContext) throws -> Run {
         let t0 = CFAbsoluteTimeGetCurrent()
-        let buffer = try makeInput(frame, context: context)
+        let buffer = try makeInput(square, context: context)
         let t1 = CFAbsoluteTimeGetCurrent()
         let features = try MLDictionaryFeatureProvider(dictionary: [inputName: MLFeatureValue(pixelBuffer: buffer)])
         let result = try model.prediction(from: features)
@@ -71,7 +71,7 @@ final class YOLOModel {
         return Run(rows: try YOLOModel.rows(array), prepMs: (t1 - t0) * 1000, inferMs: (t2 - t1) * 1000)
     }
 
-    private func makeInput(_ frame: CIImage, context: CIContext) throws -> CVPixelBuffer {
+    private func makeInput(_ square: CIImage, context: CIContext) throws -> CVPixelBuffer {
         if pool == nil {
             let attrs: [String: Any] = [
                 kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
@@ -86,14 +86,8 @@ final class YOLOModel {
             throw CameraError("Could not get a \(side)×\(side) input buffer.")
         }
         let s = CGFloat(side)
-        let k = s / max(frame.extent.width, frame.extent.height)
-        let scaled = frame.transformed(by: CGAffineTransform(scaleX: k, y: k))
-        // Core Image's origin is the bottom-left: lift the image so its top
-        // edge meets the input's top, leaving the padding below and to the right.
-        let placed = scaled.transformed(by: CGAffineTransform(translationX: -scaled.extent.minX, y: s - scaled.extent.maxY))
-        let square = CGRect(x: 0, y: 0, width: s, height: s)
-        let image = placed.composited(over: CIImage(color: CIColor.black).cropped(to: square))
-        context.render(image, to: out, bounds: square, colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
+        context.render(square, to: out, bounds: CGRect(x: 0, y: 0, width: s, height: s),
+                       colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
         return out
     }
 

@@ -1,7 +1,7 @@
 import AVFoundation
 import UIKit
 
-/// The back wide camera at a 4:3 format near 1280×960 and a fixed frame rate,
+/// The back wide camera at a 4:3 format near 1920×1440 and a fixed frame rate,
 /// delivering frames in the interface's landscape orientation.
 final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     enum Event {
@@ -11,9 +11,12 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         case interruptionEnded
         case runtimeError(String)
         case stopped
+        case focus(String)
     }
 
-    static let wantedWidth: Int32 = 1280
+    // The 6s has no 1280×960; 1920×1440 gives a far spot more pixels than the
+    // web app's 1280×960 (Ahmed's call, N1).
+    static let wantedWidth: Int32 = 1920
     static let fps: Double = 5
 
     let session = AVCaptureSession()
@@ -66,6 +69,24 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         sessionQueue.async {
             self.orientation = o
             self.applyOrientation()
+        }
+    }
+
+    /// Locks focus where it is, once spots are drawn, so autofocus can't drift
+    /// (at night especially); or goes back to continuous autofocus, for drawing.
+    func setFocusLocked(_ locked: Bool) {
+        sessionQueue.async {
+            guard let d = self.device else { return }
+            let mode: AVCaptureDevice.FocusMode = locked ? .locked : .continuousAutoFocus
+            guard d.isFocusModeSupported(mode), d.focusMode != mode else { return }
+            do {
+                try d.lockForConfiguration()
+                d.focusMode = mode
+                d.unlockForConfiguration()
+                self.onEvent?(.focus(locked ? String(format: "locked at lens position %.2f", d.lensPosition) : "continuous autofocus"))
+            } catch {
+                self.onEvent?(.failed("Could not set focus: \(error.localizedDescription)"))
+            }
         }
     }
 
@@ -157,7 +178,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         formatText = "\(Camera.describe(format)) at \(String(format: "%g", fps)) fps · \(pixelFormat == fullRange ? "420f" : "BGRA") frames"
     }
 
-    /// The 4:3 format closest to 1280 wide that runs at `fps`; on a tie, the
+    /// The 4:3 format closest to `wantedWidth` that runs at `fps`; on a tie, the
     /// larger one, then full-range video.
     static func pick(_ formats: [AVCaptureDevice.Format], fps: Double) -> AVCaptureDevice.Format? {
         let usable = formats.filter { f in

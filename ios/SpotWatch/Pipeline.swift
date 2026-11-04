@@ -2,19 +2,6 @@ import CoreImage
 import CoreML
 import Foundation
 
-enum ModelMode: String, CaseIterable, Identifiable {
-    case m640 = "640", m320 = "320", both = "Both"
-    var id: String { rawValue }
-    var sides: [Int] { self == .m640 ? [640] : self == .m320 ? [320] : [640, 320] }
-}
-
-enum Pace: String, CaseIterable, Identifiable {
-    case interval = "1.5 s", max = "Max"
-    var id: String { rawValue }
-    /// Start-to-start time between checks; a check never overlaps the previous one.
-    var intervalMs: Double { self == .interval ? 1500 : 0 }
-}
-
 enum Source: String, CaseIterable, Identifiable {
     case camera = "Camera", testImage = "bus.jpg"
     var id: String { rawValue }
@@ -26,34 +13,47 @@ enum Compute: String, CaseIterable, Identifiable {
     var units: MLComputeUnits { self == .gpu ? .cpuAndGPU : .cpuOnly }
 }
 
-/// The weights and arithmetic of the Core ML export. The A9's GPU runs FP16
-/// at about twice the FP32 rate; on bus.jpg the two give the same boxes.
+/// The weights and arithmetic of the Core ML export. On the 6s, FP16 ran
+/// 640 in about 320 ms against 550 ms for FP32 (first runs, N0).
 enum Precision: String, CaseIterable, Identifiable {
     case fp16 = "FP16", fp32 = "FP32"
     var id: String { rawValue }
 }
 
 /// Frames in, detections out, off the main thread. Checks run one at a time on
-/// the detect queue, at most once per interval, on the newest frame.
+/// the detect queue, at most once per interval, on the newest frame. Each check
+/// looks at one view per active spot (the web app's per-spot views), or at
+/// the whole frame when no spot is active.
 final class Pipeline {
     struct Options: Equatable {
-        var mode = ModelMode.both
-        var pace = Pace.interval
+        var mode = ViewMode.each320
+        var intervalMs = 1500.0
+        var minScore = 0.2
         var source = Source.camera
         var paused = false
+        var shape = ""                      // the frame shape `spots` were picked for
+        var spots: [Int: FracRect] = [:]    // active spots by index (0-based)
+    }
+
+    struct Run {
+        let side: Int
+        let inferMs: Double
+        let first: Bool                     // first run since the model loaded
     }
 
     struct CheckResult {
-        let side: Int
-        let first: Bool            // first run since the model loaded
         let started: Date
-        let prepMs: Double
-        let inferMs: Double
-        let totalMs: Double
-        let detections: [Detection]
+        let source: Source
+        let shape: String
+        let spots: [Int: FracRect]
         let frameWidth: Double
         let frameHeight: Double
-        let source: Source
+        let views: [FracRect]
+        let detections: [Detection]         // frame pixels, de-duplicated
+        let thumbs: [Int: [Float]]          // each active spot's thumbnail from this frame
+        let runs: [Run]
+        let prepMs: Double                  // cutting views into inputs, and the thumbnails
+        let totalMs: Double
     }
 
     enum Event {
@@ -61,7 +61,7 @@ final class Pipeline {
         case modelLoaded(Int, loadMs: Double, spec: String)
         case modelFailed(Int, String)
         case check(CheckResult)
-        case checkFailed(Int, String)
+        case checkFailed(String)
         case frameShape(Int, Int)
         case testImageFailed(String)
     }
@@ -87,7 +87,6 @@ final class Pipeline {
     // Detect queue only.
     private var models: [Int: YOLOModel] = [:]
     private var ranSinceLoad: Set<Int> = []
-    private var turn = 0
 
     // Tick queue only.
     private var reportedNoTestImage = false
@@ -114,7 +113,7 @@ final class Pipeline {
         lock.lock()
         let old = options
         options = new
-        if new.pace != old.pace || new.paused != old.paused { nextDue = 0 }
+        if new.intervalMs != old.intervalMs || new.paused != old.paused { nextDue = 0 }
         lock.unlock()
         if new.source != old.source {
             if new.source == .camera { camera.start() } else { camera.stop() }
@@ -186,11 +185,11 @@ final class Pipeline {
             return
         }
         busy = true
-        nextDue = now + options.pace.intervalMs / 1000
-        let sides = options.mode.sides
+        nextDue = now + options.intervalMs / 1000
+        let opts = options
         lock.unlock()
         detectQueue.async {
-            self.check(frame, sides: sides, source: source)
+            self.check(frame, opts, source: source)
             self.lock.lock()
             self.busy = false
             self.lock.unlock()
@@ -199,25 +198,37 @@ final class Pipeline {
 
     // MARK: - Checks (detect queue)
 
-    private func check(_ frame: CIImage, sides: [Int], source: Source) {
-        let ready = sides.filter { models[$0] != nil }
-        guard !ready.isEmpty else { return }
-        let side = ready[turn % ready.count]
-        turn += 1
-        guard let model = models[side] else { return }
+    private func check(_ frame: CIImage, _ o: Options, source: Source) {
+        guard let model = models[o.mode.side] else { return }
         let started = Date()
         let t0 = CFAbsoluteTimeGetCurrent()
+        let fw = Double(frame.extent.width), fh = Double(frame.extent.height)
+        let order = o.spots.keys.sorted()
+        let views = Geometry.views(order.map { o.spots[$0]! })
         do {
-            let run = try model.run(frame, context: context)
-            let box = Letterbox(frameWidth: Double(frame.extent.width), frameHeight: Double(frame.extent.height), side: Double(side))
-            let dets = YOLO26.detections(rows: run.rows, letterbox: box)
-            let first = !ranSinceLoad.contains(side)
-            ranSinceLoad.insert(side)
-            onEvent?(.check(CheckResult(side: side, first: first, started: started, prepMs: run.prepMs, inferMs: run.inferMs,
-                                        totalMs: (CFAbsoluteTimeGetCurrent() - t0) * 1000, detections: dets,
-                                        frameWidth: box.frameWidth, frameHeight: box.frameHeight, source: source)))
+            var found: [Detection] = []
+            var runs: [Run] = []
+            var prepMs = 0.0
+            for tiles in Mosaic.inputs(views, frameWidth: fw, frameHeight: fh, mode: o.mode) {
+                let run = try model.run(Composer.input(frame, tiles: tiles, side: model.side), context: context)
+                let dets = YOLO26.detections(rows: run.rows, side: Double(model.side), minScore: o.minScore)
+                found += Mosaic.mapBack(dets, tiles: tiles)
+                prepMs += run.prepMs
+                runs.append(Run(side: model.side, inferMs: run.inferMs, first: !ranSinceLoad.contains(model.side)))
+                ranSinceLoad.insert(model.side)
+            }
+            let t1 = CFAbsoluteTimeGetCurrent()
+            var thumbs: [Int: [Float]] = [:]
+            for i in order {
+                thumbs[i] = Composer.thumbnail(frame, spot: o.spots[i]!.pixels(width: fw, height: fh), context: context)
+            }
+            prepMs += (CFAbsoluteTimeGetCurrent() - t1) * 1000
+            onEvent?(.check(CheckResult(started: started, source: source, shape: o.shape, spots: o.spots,
+                                        frameWidth: fw, frameHeight: fh, views: views,
+                                        detections: Geometry.dedupe(found), thumbs: thumbs, runs: runs, prepMs: prepMs,
+                                        totalMs: (CFAbsoluteTimeGetCurrent() - t0) * 1000)))
         } catch {
-            onEvent?(.checkFailed(side, error.localizedDescription))
+            onEvent?(.checkFailed("YOLO26n \(model.side): \(error.localizedDescription)"))
         }
     }
 }

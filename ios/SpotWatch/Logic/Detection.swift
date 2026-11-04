@@ -3,7 +3,7 @@ import Foundation
 // Pure detection types and YOLO26n output parsing. Foundation only: no
 // AVFoundation, UIKit, SwiftUI or Core ML, so it runs in unit tests.
 
-/// A box in frame pixels. x, y is the top-left corner, like the web app's bbox.
+/// A box in pixels. x, y is the top-left corner, like the web app's bbox.
 struct Box: Equatable {
     var x: Double
     var y: Double
@@ -21,6 +21,8 @@ struct Detection: Equatable {
     var className: String { COCO.name(classIndex) }
     var isVehicle: Bool { COCO.vehicles.contains(className) }
     var isPerson: Bool { className == "person" }
+
+    func with(box: Box) -> Detection { Detection(classIndex: classIndex, score: score, box: box) }
 }
 
 enum COCO {
@@ -39,38 +41,24 @@ enum COCO {
     }
 }
 
-/// How a frame sits in the square model input: scaled to fit, anchored at
-/// the top-left, with black padding on the right or bottom (as in the web app).
-struct Letterbox: Equatable {
-    let frameWidth: Double
-    let frameHeight: Double
-    let side: Double
-
-    /// Input pixels per frame pixel.
-    var scale: Double { side / max(frameWidth, frameHeight) }
-}
-
 enum YOLO26 {
     static let rows = 300
     static let rowLength = 6
-    static let minScore = 0.2       // PLAN.md: lowest confidence that counts for cars
-    static let maxBoxes = 20        // as the web app's MAX_BOXES
+    static let maxBoxes = 20        // per run, as the web app's MAX_BOXES
 
-    /// Turns the model's [1, 300, 6] output into detections in frame pixels.
-    /// Each row is x1, y1, x2, y2 (input pixels), score, class. The head is
-    /// end-to-end: rows are already de-duplicated and best first, so there is
-    /// no NMS step. Boxes are clipped to the frame.
-    static func detections(rows values: [Float], letterbox: Letterbox,
-                           minScore: Double = minScore, maxBoxes: Int = maxBoxes) -> [Detection] {
-        let k = 1 / letterbox.scale     // frame pixels per input pixel
+    /// Turns the model's [1, 300, 6] output into detections in input pixels,
+    /// clipped to the side×side input. Each row is x1, y1, x2, y2, score,
+    /// class. The head is end-to-end, best first, with no NMS step, but it can
+    /// still return one object twice: `Geometry.dedupe` handles that.
+    static func detections(rows values: [Float], side: Double, minScore: Double,
+                           maxBoxes: Int = maxBoxes) -> [Detection] {
         var out: [Detection] = []
         var i = 0
         while i + rowLength <= values.count && out.count < maxBoxes {
             let score = Double(values[i + 4])
             if score >= minScore {
-                let x1 = max(0, Double(values[i]) * k), y1 = max(0, Double(values[i + 1]) * k)
-                let x2 = min(letterbox.frameWidth, Double(values[i + 2]) * k)
-                let y2 = min(letterbox.frameHeight, Double(values[i + 3]) * k)
+                let x1 = max(0, Double(values[i])), y1 = max(0, Double(values[i + 1]))
+                let x2 = min(side, Double(values[i + 2])), y2 = min(side, Double(values[i + 3]))
                 if x2 > x1 && y2 > y1 {
                     out.append(Detection(classIndex: Int(values[i + 5].rounded()), score: score,
                                          box: Box(x: x1, y: y1, w: x2 - x1, h: y2 - y1)))

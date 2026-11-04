@@ -2,10 +2,11 @@ import AVFoundation
 import SwiftUI
 import UIKit
 
-let buildLabel = "N0 · 2026-11-03 · 1"
+let buildLabel = "N1 · 2026-11-04 · 1"
 
 /// Everything the screen shows, and the report. Lives on the main thread; the
-/// pipeline's events hop here.
+/// pipeline's events hop here. Spots, the event log and settings are in
+/// AppModel+Spots.swift, the report in AppModel+Report.swift.
 @MainActor
 final class AppModel: ObservableObject {
     enum RowState { case idle, busy, ok, warn, fail }
@@ -35,80 +36,102 @@ final class AppModel: ObservableObject {
         var loadMs: Double?
         var spec = ""
         var infer = TimingStats()
-        var prep = TimingStats()
-        var lastDetections = ""
     }
 
+    static let spotCount = 3
     static let logMax = 50
     static let errorsMax = 50
+    static let eventsShown = 50
     static let noFramesWarnS = 5.0
+    static let focusLockDelay: UInt64 = 2_000_000_000   // ns after the camera starts or a spot is saved
 
-    @Published private(set) var rows: [StatusRow] = [
+    @Published var rows: [StatusRow] = [
         StatusRow(id: "camera", label: "Camera"),
         StatusRow(id: "640", label: "YOLO26n 640"),
         StatusRow(id: "320", label: "YOLO26n 320"),
         StatusRow(id: "check", label: "Checks"),
+        StatusRow(id: "spots", label: "Spots"),
+        StatusRow(id: "events", label: "Events"),
         StatusRow(id: "device", label: "Device"),
         StatusRow(id: "app", label: "App")
     ]
-    @Published private(set) var log: [LogEntry] = []
-    @Published private(set) var errors: [ErrorEntry] = []
-    @Published private(set) var detections: [Detection] = []
-    @Published private(set) var frameSize = CGSize(width: 4, height: 3)
-    @Published private(set) var lastSide: Int?
-    @Published private(set) var lastCheckAt: Date?
-    @Published private(set) var timing: [Int: ModelTiming] = [640: ModelTiming(), 320: ModelTiming()]
-    @Published private(set) var busy = BusyTracker()
-    @Published private(set) var checksOK = 0
-    @Published private(set) var checksFailed = 0
-    @Published private(set) var cpu: Double?
-    @Published private(set) var cpuAvg: Double?
-    @Published private(set) var memoryMB: Double?
-    @Published private(set) var headroomMB: Double?
-    @Published private(set) var thermal = DeviceInfo.thermalText()
-    @Published private(set) var battery = "–"
-    @Published private(set) var fps: Double?
-    @Published private(set) var cameraRunning = false
-    @Published private(set) var orientation: AVCaptureVideoOrientation?
+    @Published var log: [LogEntry] = []
+    @Published var errors: [ErrorEntry] = []
+    @Published var detections: [Detection] = []
+    @Published var views: [FracRect] = []                 // the last check's views; empty for the full frame
+    @Published var frameSize = CGSize(width: 4, height: 3)
+    @Published var lastCheckAt: Date?
+    @Published var timing: [Int: ModelTiming] = [640: ModelTiming(), 320: ModelTiming()]
+    @Published var checkStats = TimingStats()
+    @Published var prepStats = TimingStats()
+    @Published var busy = BusyTracker()
+    @Published var checksOK = 0
+    @Published var checksFailed = 0
+    @Published var cpu: Double?
+    @Published var cpuAvg: Double?
+    @Published var memoryMB: Double?
+    @Published var headroomMB: Double?
+    @Published var thermal = DeviceInfo.thermalText()
+    @Published var battery = "–"
+    @Published var fps: Double?
+    @Published var cameraRunning = false
+    @Published var orientation: AVCaptureVideoOrientation?
     @Published var copyResult = ""
+    @Published var exportResult = ""
 
-    @Published var mode: ModelMode { didSet { optionsChanged("Models", mode.rawValue) } }
-    @Published var pace: Pace { didSet { optionsChanged("Pace", pace.rawValue) } }
+    // Spots and the event log (AppModel+Spots.swift).
+    @Published var spots: [Spot?] = Array(repeating: nil, count: AppModel.spotCount)
+    @Published var tracks: [SpotTrack] = Array(repeating: SpotTrack(), count: AppModel.spotCount)
+    @Published var drawingSpot: Int?
+    @Published var drawHint = ""
+    @Published var recentEvents: [EventRow] = []
+    @Published var showSettings = false
+    @Published var cfg = Config()
+
+    @Published var viewMode: ViewMode { didSet { optionsChanged("Views", viewMode.rawValue) } }
     @Published var source: Source { didSet { sourceChanged() } }
     @Published var paused = false { didSet { optionsChanged("Detection", paused ? "paused" : "resumed") } }
     @Published var compute: Compute { didSet { modelsChanged("Compute", compute.units.text) } }
     @Published var precision: Precision { didSet { modelsChanged("Precision", precision.rawValue) } }
+    @Published var showBoxes: Bool { didSet { optionsChanged("Detection boxes", showBoxes ? "on" : "off") } }
 
     let testImage: UIImage? = Bundle.main.url(forResource: "bus", withExtension: "jpg").flatMap { UIImage(contentsOfFile: $0.path) }
     var session: AVCaptureSession { pipeline.camera.session }
 
-    private let pipeline = Pipeline()
-    private let started = Date()
-    private var cpuSamples: [Double] = []
-    private var lastBatteryLevel: Float?
-    private var lastBatteryState: UIDevice.BatteryState?
-    private var noFramesReported = false
-    private var droppedTotal = 0
-    private var lastDropReason = ""
-    private var startedPipeline = false
+    let pipeline = Pipeline()
+    let started = Date()
+    var store: EventStore?
+    /// The frame's pixel size for the current source, once known.
+    var frameDims: CGSize?
+    var lastShape: String?
+    var cpuSamples: [Double] = []
+    var lastBatteryLevel: Float?
+    var lastBatteryState: UIDevice.BatteryState?
+    var noFramesReported = false
+    var droppedTotal = 0
+    var lastDropReason = ""
+    var focusText = "–"
+    var startedPipeline = false
 
     init() {
         let d = UserDefaults.standard
-        mode = d.string(forKey: "sw.mode").flatMap(ModelMode.init) ?? .both
-        pace = d.string(forKey: "sw.pace").flatMap(Pace.init) ?? .interval
+        viewMode = d.string(forKey: "sw.viewMode").flatMap(ViewMode.init) ?? .each320
         compute = d.string(forKey: "sw.compute").flatMap(Compute.init) ?? .gpu
         precision = d.string(forKey: "sw.precision").flatMap(Precision.init) ?? .fp16
+        showBoxes = d.object(forKey: "sw.showBoxes") as? Bool ?? true
         #if targetEnvironment(simulator)
         source = .testImage                       // the Simulator has no camera
         #else
         source = d.string(forKey: "sw.source").flatMap(Source.init) ?? .camera
         #endif
+        if source == .testImage, let img = testImage { frameDims = img.size }
     }
 
     var frameAspect: CGFloat { frameSize.height > 0 ? frameSize.width / frameSize.height : 4 / 3 }
 
-    private var options: Pipeline.Options {
-        Pipeline.Options(mode: mode, pace: pace, source: source, paused: paused)
+    var options: Pipeline.Options {
+        Pipeline.Options(mode: viewMode, intervalMs: cfg.interval, minScore: cfg.minScore, source: source,
+                         paused: paused, shape: currentShape ?? "", spots: activeSpots)
     }
 
     // MARK: - Start
@@ -126,6 +149,11 @@ final class AppModel: ObservableObject {
         set("app", .ok, "Active · screen lock off")
         set("camera", source == .camera ? .busy : .idle, source == .camera ? "Starting…" : "Off (source is bus.jpg)")
         set("check", .idle, "Waits for a frame and a model")
+        loadSettings()
+        loadSpots()
+        openEventLog()
+        lastShape = currentShape
+        renderSpotsStatus()
         pipeline.onEvent = { [weak self] e in
             DispatchQueue.main.async { self?.handle(e) }
         }
@@ -159,6 +187,7 @@ final class AppModel: ObservableObject {
         orientation = o
         addLog("camera", "Orientation \(o.text)")
         pipeline.camera.setOrientation(o)
+        shapeMaybeChanged()
     }
 
     func scenePhaseChanged(_ phase: ScenePhase) {
@@ -177,45 +206,62 @@ final class AppModel: ObservableObject {
         }
     }
 
-    // MARK: - Settings
+    // MARK: - Options
 
-    private func optionsChanged(_ what: String, _ value: String) {
+    func saveOptions() {
         let d = UserDefaults.standard
-        d.set(mode.rawValue, forKey: "sw.mode")
-        d.set(pace.rawValue, forKey: "sw.pace")
+        d.set(viewMode.rawValue, forKey: "sw.viewMode")
         d.set(source.rawValue, forKey: "sw.source")
         d.set(compute.rawValue, forKey: "sw.compute")
         d.set(precision.rawValue, forKey: "sw.precision")
-        addLog("settings", "\(what): \(value)")
+        d.set(showBoxes, forKey: "sw.showBoxes")
+    }
+
+    func pushOptions() {
         if startedPipeline { pipeline.update(options) }
+    }
+
+    private func optionsChanged(_ what: String, _ value: String) {
+        saveOptions()
+        addLog("settings", "\(what): \(value)")
+        pushOptions()
     }
 
     private func sourceChanged() {
         detections = []
-        lastSide = nil
+        views = []
         if source == .testImage {
             cameraRunning = false
             set("camera", .idle, "Off (source is bus.jpg)")
-            if let img = testImage { frameSize = img.size }
+            frameDims = testImage?.size
+            if let s = frameDims { frameSize = s }
         } else {
             set("camera", .busy, "Starting…")
+            frameDims = nil
             frameSize = CGSize(width: 4, height: 3)
         }
         optionsChanged("Source", source.rawValue)
+        shapeMaybeChanged()
     }
 
     /// Compute units and precision need the models loaded again, and new timings.
     private func modelsChanged(_ what: String, _ value: String) {
         optionsChanged(what, value)
         guard startedPipeline else { return }
-        timing = [640: ModelTiming(), 320: ModelTiming()]
-        busy = BusyTracker()
+        resetTimings()
         pipeline.loadModels(compute, precision)
     }
 
-    private var modelText: String { "\(precision.rawValue) · \(compute.units.text)" }
+    func resetTimings() {
+        timing = [640: ModelTiming(), 320: ModelTiming()]
+        checkStats = TimingStats()
+        prepStats = TimingStats()
+        busy = BusyTracker()
+    }
 
-    // MARK: - Events
+    var modelText: String { "\(precision.rawValue) · \(compute.units.text)" }
+
+    // MARK: - Pipeline events
 
     private func handle(_ e: Pipeline.Event) {
         switch e {
@@ -231,29 +277,39 @@ final class AppModel: ObservableObject {
             fail("model", "YOLO26n \(side): \(msg)")
         case .check(let r):
             guard r.source == source else { return }    // a check from before a source switch
-            checksOK += 1
-            timing[r.side]?.infer.add(r.inferMs)
-            timing[r.side]?.prep.add(r.prepMs)
-            timing[r.side]?.lastDetections = YOLO26.summarize(r.detections)
-            busy.add(start: r.started.timeIntervalSinceReferenceDate, duration: r.totalMs / 1000)
-            detections = r.detections
-            frameSize = CGSize(width: r.frameWidth, height: r.frameHeight)
-            lastSide = r.side
-            lastCheckAt = r.started
-            set("check", .ok, "\(r.side) at \(Format.clock(r.started)) · \(Format.ms(r.inferMs)) · \(YOLO26.summarize(r.detections))")
-            if r.first {
-                addLog("check", "First \(r.side) run: \(Format.ms(r.inferMs)) (prep \(Format.ms(r.prepMs))) · \(YOLO26.summarize(r.detections))")
-            }
-        case .checkFailed(let side, let msg):
+            checkDone(r)
+        case .checkFailed(let msg):
             checksFailed += 1
-            set("check", .fail, "\(side): \(msg)")
-            fail("check", "YOLO26n \(side): \(msg)")
+            set("check", .fail, msg)
+            fail("check", msg)
         case .frameShape(let w, let h):
-            addLog("camera", "Frames are \(w)×\(h)" + (w > h ? " (landscape)" : " (portrait)"))
+            addLog("camera", "Frames are \(w)×\(h)")
+            if source == .camera {
+                frameDims = CGSize(width: w, height: h)
+                shapeMaybeChanged()
+            }
         case .testImageFailed(let msg):
             fail("source", msg)
             source = .camera
         }
+    }
+
+    private func checkDone(_ r: Pipeline.CheckResult) {
+        checksOK += 1
+        for run in r.runs {
+            timing[run.side]?.infer.add(run.inferMs)
+            if run.first { addLog("check", "First \(run.side) run: \(Format.ms(run.inferMs))") }
+        }
+        checkStats.add(r.totalMs)
+        prepStats.add(r.prepMs)
+        busy.add(start: r.started.timeIntervalSinceReferenceDate, duration: r.totalMs / 1000)
+        detections = r.detections
+        views = r.views == [.full] ? [] : r.views
+        frameSize = CGSize(width: r.frameWidth, height: r.frameHeight)
+        lastCheckAt = r.started
+        let runs = r.runs.count == 1 ? "1 run" : "\(r.runs.count) runs"
+        set("check", .ok, "\(Format.clock(r.started)) · \(Format.ms(r.totalMs)) · \(viewMode.rawValue), \(runs) · \(YOLO26.summarize(r.detections))")
+        updateSpots(r)
     }
 
     private func handleCamera(_ e: Camera.Event) {
@@ -264,6 +320,8 @@ final class AppModel: ObservableObject {
             set("camera", .ok, format)
             addLog("camera", "Started: \(format)")
             addLog("camera", "4:3 formats: \(pipeline.camera.formatsOnOffer.joined(separator: "; "))")
+            logEvent(nil, "start", coverage: nil, detail: "")
+            lockFocusSoon()
         case .failed(let msg):
             cameraRunning = false
             set("camera", .fail, msg)
@@ -281,12 +339,26 @@ final class AppModel: ObservableObject {
         case .stopped:
             cameraRunning = false
             addLog("camera", "Stopped")
+        case .focus(let text):
+            focusText = text
+            addLog("camera", "Focus \(text)")
+        }
+    }
+
+    /// Locks focus a moment after the camera starts or a spot is saved, once
+    /// any spot is drawn, so autofocus can't drift (at night especially).
+    func lockFocusSoon() {
+        guard source == .camera, spots.contains(where: { $0 != nil }) else { return }
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: AppModel.focusLockDelay)
+            guard let self = self, self.drawingSpot == nil, self.source == .camera else { return }
+            self.pipeline.camera.setFocusLocked(true)
         }
     }
 
     // MARK: - Device readings (every second)
 
-    private func sampleDevice() {
+    func sampleDevice() {
         if let c = DeviceInfo.cpuPercent() {
             cpu = c
             cpuSamples.append(c)
@@ -331,7 +403,7 @@ final class AppModel: ObservableObject {
 
     // MARK: - Rows, log, errors
 
-    private func set(_ id: String, _ state: RowState, _ detail: String) {
+    func set(_ id: String, _ state: RowState, _ detail: String) {
         guard let i = rows.firstIndex(where: { $0.id == id }) else { return }
         if rows[i].state != state || rows[i].detail != detail {
             rows[i].state = state
@@ -350,103 +422,11 @@ final class AppModel: ObservableObject {
         if log.count > AppModel.logMax { log.removeFirst(log.count - AppModel.logMax) }
     }
 
-    private func fail(_ stage: String, _ msg: String) {
+    func fail(_ stage: String, _ msg: String) {
         errors.append(ErrorEntry(time: Format.clock(), msg: "[\(stage)] \(msg)"))
         if errors.count > AppModel.errorsMax { errors.removeFirst(errors.count - AppModel.errorsMax) }
         addLog("error", "[\(stage)] \(msg)")
     }
 
     func clearErrors() { errors = [] }
-
-    // MARK: - Report
-
-    func hudLine(_ side: Int) -> String {
-        guard let t = timing[side] else { return "" }
-        let avg = t.infer.average.map { "avg \(Format.ms($0)) (n \(t.infer.count))" } ?? "avg –"
-        return "\(side): last \(Format.ms(t.infer.last)) · \(avg)"
-    }
-
-    var cpuText: String {
-        guard let c = cpu else { return "–" }
-        return "\(Int(c.rounded()))% (10 s avg \(Int((cpuAvg ?? c).rounded()))%) of \(DeviceInfo.cores * 100)%"
-    }
-
-    var memoryText: String {
-        guard let m = memoryMB else { return "–" }
-        return "\(Int(m.rounded())) MB" + (headroomMB.map { " · \(Int($0.rounded())) MB headroom" } ?? "")
-    }
-
-    func statRows() -> [(String, String)] {
-        var out: [(String, String)] = [
-            ("Models", mode.rawValue + " · pace " + pace.rawValue + " · " + modelText),
-            ("Source", source == .camera
-                ? "camera · " + (fps.map { String(format: "%.1f fps", $0) } ?? "– fps") + (orientation.map { " · " + $0.text } ?? "")
-                : "bus.jpg"),
-            ("Frame", "\(Int(frameSize.width))×\(Int(frameSize.height))")
-        ]
-        for side in [640, 320] {
-            guard let t = timing[side] else { continue }
-            out.append(("\(side) load / first", "\(Format.ms(t.loadMs)) / \(Format.ms(t.infer.first))"))
-            out.append(("\(side) inference", t.infer.averageText))
-            out.append(("\(side) min / max", t.infer.minMaxText))
-            out.append(("\(side) prep", t.prep.average.map { "avg \(Format.ms($0))" } ?? "–"))
-        }
-        out.append(("Detector busy", busy.percent.map { "\($0)% (last \(busy.checks.count) checks)" } ?? "–"))
-        out.append(("Checks", "\(checksOK) ok · \(checksFailed) failed" + (paused ? " · paused" : "")))
-        out.append(("CPU", cpuText))
-        out.append(("Memory", memoryText))
-        out.append(("Thermal", thermal + " · camera pressure " + pipeline.camera.pressureText))
-        out.append(("Battery", battery))
-        out.append(("Dropped frames", "\(droppedTotal)" + (lastDropReason.isEmpty ? "" : " (last: \(lastDropReason))")))
-        return out
-    }
-
-    func buildReport() -> String {
-        var lines: [String] = []
-        lines.append("Spot Watch iOS report · \(buildLabel)")
-        lines.append("Time: \(Date())")
-        #if DEBUG
-        let config = "Debug"
-        #else
-        let config = "Release"
-        #endif
-        lines.append("\(DeviceInfo.model) · iOS \(UIDevice.current.systemVersion) · \(DeviceInfo.cores) cores · \(config) build")
-        lines.append("Up \(Int(Date().timeIntervalSince(started) / 60)) min")
-        lines.append("")
-        lines.append("Status:")
-        for r in rows { lines.append("  \(r.label): \(r.state) · \(r.detail)") }
-        lines.append("")
-        lines.append("Checks:")
-        for (k, v) in statRows() { lines.append("  \(k): \(v)") }
-        for side in [640, 320] {
-            if let t = timing[side], !t.spec.isEmpty {
-                lines.append("  \(side) spec: \(t.spec) · last: \(t.lastDetections.isEmpty ? "no run yet" : t.lastDetections)")
-            }
-        }
-        lines.append("  Camera: \(pipeline.camera.formatText.isEmpty ? "not started" : pipeline.camera.formatText)")
-        lines.append("  4:3 formats: \(pipeline.camera.formatsOnOffer.joined(separator: "; "))")
-        lines.append("")
-        lines.append("Last detections (\(lastSide.map { "YOLO26n \($0)" } ?? "none yet")\(lastCheckAt.map { " at " + Format.clock($0) } ?? "")):")
-        if detections.isEmpty { lines.append("  none above \(Int(YOLO26.minScore * 100))%") }
-        for d in detections {
-            let b = d.box
-            lines.append("  \(d.className) \(Int((d.score * 100).rounded()))% · x \(Int(b.x)) y \(Int(b.y)) w \(Int(b.w)) h \(Int(b.h))")
-        }
-        lines.append("")
-        lines.append("Errors (\(errors.count)):")
-        for e in errors { lines.append("  \(e.time) \(e.msg)") }
-        lines.append("")
-        lines.append("Log (newest first):")
-        for e in log.reversed() { lines.append("  " + e.line) }
-        return lines.joined(separator: "\n")
-    }
-
-    func copyReport() {
-        let text = buildReport()
-        UIPasteboard.general.string = text
-        copyResult = UIPasteboard.general.string == text
-            ? "Report copied at \(Format.clock()) (\(text.split(separator: "\n").count) lines)."
-            : "Could not copy the report."
-        if UIPasteboard.general.string != text { fail("report", "The pasteboard did not take the report") }
-    }
 }
