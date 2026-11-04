@@ -68,6 +68,9 @@ extension AppModel {
         out.append(("Thermal", thermal + " · camera pressure " + pipeline.camera.pressureText))
         out.append(("Battery", battery))
         out.append(("Focus", focusText))
+        out.append(("Motion", !motion.available ? "no sensor"
+            : (phoneMoving ? "moving" : "still") + " · \(spotResets) spot resets"
+                + (lastSpotReset.map { " (last \(Format.clock($0)))" } ?? "")))
         out.append(("Dropped frames", "\(droppedTotal)" + (lastDropReason.isEmpty ? "" : " (last: \(lastDropReason))")))
         return out
     }

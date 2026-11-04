@@ -101,6 +101,35 @@ extension AppModel {
         lockFocusSoon()
     }
 
+    // MARK: - Phone movement
+
+    func handleMotion(_ e: MotionMonitor.Event) {
+        switch e {
+        case .started:
+            phoneMoving = true
+            resetSpots("phone moved")
+        case .settled:
+            phoneMoving = false
+            addLog("motion", "Phone still again: spots rebuilding")
+        case .failed(let msg):
+            fail("motion", "Motion sensor: \(msg)")
+        }
+    }
+
+    /// Every spot back to unknown, so the next readings can't look like a
+    /// departure: a FREE never fires from unknown. Cooldowns are kept.
+    func resetSpots(_ why: String) {
+        spotResets += 1
+        lastSpotReset = Date()
+        guard tracks.contains(where: { $0.state != .unknown }) else {
+            addLog("spots", "Reset (\(why)): all spots were already unknown")
+            return
+        }
+        tracks = Array(repeating: SpotTrack(), count: AppModel.spotCount)
+        logEvent(nil, "spots_reset", coverage: nil, detail: why)
+        renderSpotsStatus()
+    }
+
     func renderSpotsStatus() {
         guard let shape = currentShape else {
             set("spots", .idle, spots.contains(where: { $0 != nil }) ? "Waiting for a frame" : "No spot drawn yet")
@@ -128,9 +157,10 @@ extension AppModel {
     // MARK: - Readings and states
 
     /// Feeds each active spot this check's reading. A check made for another
-    /// frame shape, or before a spot was redrawn, gives that spot no reading.
+    /// frame shape, before a spot was redrawn, or while the phone moves gives
+    /// no reading.
     func updateSpots(_ r: Pipeline.CheckResult) {
-        guard r.shape == currentShape,
+        guard !phoneMoving, r.shape == currentShape,
               Geometry.shape(width: r.frameWidth, height: r.frameHeight, label: shapeLabel) == currentShape else { return }
         let settings = cfg.spotSettings
         for (i, rect) in r.spots.sorted(by: { $0.key < $1.key }) where spots[i]?.rect == rect {

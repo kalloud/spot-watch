@@ -140,6 +140,12 @@ final class AppModel: ObservableObject {
     var cameraDown = false
     var appActive = true
     var activeSince = Date()
+    var wasInBackground = false
+    // The phone being handled (MotionMonitor): no readings while it moves.
+    let motion = MotionMonitor()
+    var phoneMoving = false
+    var spotResets = 0
+    var lastSpotReset: Date?
 
     init() {
         let d = UserDefaults.standard
@@ -194,6 +200,11 @@ final class AppModel: ObservableObject {
         }
         pipeline.start(options, compute: compute, precision: precision)
         startAlerts()
+        motion.onEvent = { [weak self] e in
+            DispatchQueue.main.async { self?.handleMotion(e) }
+        }
+        motion.start()
+        if !motion.available { addLog("motion", "No motion sensor: handling the phone can't be noticed") }
         #if DEBUG
         // `simctl launch --console-pty … -reportAfter 20` prints the report, for Simulator checks.
         let after = UserDefaults.standard.double(forKey: "reportAfter")
@@ -237,12 +248,16 @@ final class AppModel: ObservableObject {
             activeSince = Date()
             set("app", .ok, "Active · screen lock off")
             addLog("app", "Active")
+            // The camera was off, and the phone may have been moved meanwhile.
+            if wasInBackground { resetSpots("back from the background") }
+            wasInBackground = false
         case .inactive:
             appActive = false
             set("app", .warn, "Inactive")
             addLog("app", "Inactive")
         case .background:
             appActive = false
+            wasInBackground = true
             set("app", .fail, "In the background: iOS stops the camera")
             addLog("app", "In the background")
         @unknown default:
@@ -427,7 +442,7 @@ final class AppModel: ObservableObject {
             lastBatteryState = dev.batteryState
         }
         let hot = ProcessInfo.processInfo.thermalState == .serious || ProcessInfo.processInfo.thermalState == .critical
-        set("device", hot ? .warn : .ok, "Thermal \(thermal) · battery \(battery)")
+        set("device", hot ? .warn : .ok, "Thermal \(thermal) · battery \(battery)" + (phoneMoving ? " · phone moving" : ""))
 
         let drops = pipeline.camera.takeDrops()
         if drops.count > 0 {
