@@ -2,7 +2,7 @@ import AVFoundation
 import SwiftUI
 import UIKit
 
-let buildLabel = "N1 · 2026-11-04 · 2"
+let buildLabel = "N1 · 2026-11-04 · 3"
 
 /// Everything the screen shows, and the report. Lives on the main thread; the
 /// pipeline's events hop here. Spots, the event log and settings are in
